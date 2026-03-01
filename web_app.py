@@ -180,10 +180,22 @@ def load_willingness():
 
 def render_branding_header(show_logo=True):
     if show_logo and os.path.exists(LOGO_FILE):
-        st.image(LOGO_FILE, use_container_width=True)
+        c1, c2, c3 = st.columns([2, 1, 2])
+        with c2:
+            st.image(LOGO_FILE, width=180)
 
-    st.markdown("## SASTRA SoME End Semester Examination Duty Portal")
-    st.markdown("### School of Mechanical Engineering")
+    st.markdown(
+        "<h2 style='text-align:center; margin-bottom:0.25rem;'>"
+        "SASTRA SoME End Semester Examination Duty Portal"
+        "</h2>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<h4 style='text-align:center; margin-top:0;'>"
+        "School of Mechanical Engineering"
+        "</h4>",
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
 
@@ -193,7 +205,6 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
     render_branding_header(show_logo=True)
-    st.info("Official Notice: Willingness will be accommodated as much as possible based on institutional requirements.")
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.subheader("Faculty Login")
@@ -251,7 +262,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    "<div class='blink-notice'>Official Notice: The University Examination Committee sincerely appreciates your cooperation. Every effort will be made to accommodate your willingness, while ensuring adherence to institutional requirements and examination needs. The final duty allocation will be carried out using AI-assisted optimization integrated with Google OR-Tools.</div>",
+    "<div class='blink-notice'><strong>Note:</strong> The University Examination Committee sincerely appreciates your cooperation. Every effort will be made to accommodate your willingness, while ensuring adherence to institutional requirements and examination needs. The final duty allocation will be carried out using AI-assisted optimization integrated with Google OR-Tools.</div>",
     unsafe_allow_html=True,
 )
 
@@ -270,6 +281,7 @@ if "acp_notice_shown_for" not in st.session_state:
 
 # Control panel at top as requested
 st.subheader("Control Panel")
+st.caption("Admin View is available here. Please choose User View or Admin View.")
 panel_mode = st.radio(
     "Choose Mode",
     ["User View", "Admin View"],
@@ -497,8 +509,6 @@ with right:
         render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
     else:
         render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
-        if designation_key == "ACP":
-            render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
