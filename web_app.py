@@ -9,7 +9,7 @@ FACULTY_FILE = "Faculty_Master.xlsx"
 OFFLINE_FILE = "Offline_Duty.xlsx"
 ONLINE_FILE = "Online_Duty.xlsx"
 WILLINGNESS_FILE = "Willingness.xlsx"
-LOGO_FILE = "sastra_logo.png"
+LOGO_FILE = "sas40_WO_TPJ (1).png"
 
 st.set_page_config(page_title="SASTRA Duty Portal", layout="wide")
 
@@ -472,3 +472,4 @@ with right:
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
+
