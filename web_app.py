@@ -228,7 +228,105 @@ faculty_df["Clean"] = faculty_df["Name"].apply(clean)
 
 # ---------------- HEADER ---------------- #
 render_branding_header(show_logo=False)
-st.info("Official Notice: Willingness will be accommodated as much as possible based on institutional requirements.")
+
+st.markdown(
+    """
+    <style>
+    .blink-notice {
+        font-weight: 700;
+        color: #800000;
+        padding: 10px 12px;
+        border: 2px solid #800000;
+        background: #fff6f6;
+        border-radius: 6px;
+        animation: blinkPulse 1.2s infinite;
+    }
+    @keyframes blinkPulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.35; }
+        100% { opacity: 1; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<div class='blink-notice'>Official Notice: The University Examination Committee sincerely appreciates your cooperation. Every effort will be made to accommodate your willingness, while ensuring adherence to institutional requirements and examination needs. The final duty allocation will be carried out using AI-assisted optimization integrated with Google OR-Tools.</div>",
+    unsafe_allow_html=True,
+)
+
+if "admin_authenticated" not in st.session_state:
+    st.session_state.admin_authenticated = False
+if "panel_mode" not in st.session_state:
+    st.session_state.panel_mode = "User View"
+if "confirm_delete_willingness" not in st.session_state:
+    st.session_state.confirm_delete_willingness = False
+if "selected_slots" not in st.session_state:
+    st.session_state.selected_slots = []
+if "selected_faculty" not in st.session_state:
+    st.session_state.selected_faculty = ""
+
+# Control panel at top as requested
+st.subheader("Control Panel")
+panel_mode = st.radio(
+    "Choose Mode",
+    ["User View", "Admin View"],
+    horizontal=True,
+    key="panel_mode",
+)
+
+if panel_mode == "Admin View":
+    st.markdown("### Admin View (Password Protected)")
+    if not st.session_state.admin_authenticated:
+        admin_pass = st.text_input("Admin Password", type="password", key="admin_password")
+        if st.button("Unlock Admin View", key="unlock_admin"):
+            if admin_pass == "sathya":
+                st.session_state.admin_authenticated = True
+                st.success("Admin access granted.")
+                st.rerun()
+            else:
+                st.error("Invalid admin password.")
+    else:
+        st.success("Admin view unlocked")
+        willingness_admin = load_willingness().drop(columns=["FacultyClean"], errors="ignore")
+        if willingness_admin.empty:
+            st.info("No willingness submissions yet.")
+        else:
+            view_df = willingness_admin.copy().reset_index(drop=True)
+            view_df.insert(0, "Sl.No", view_df.index + 1)
+            st.dataframe(view_df, use_container_width=True, hide_index=True)
+            csv_data = view_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download Willingness CSV",
+                data=csv_data,
+                file_name="Willingness_Admin_View.csv",
+                mime="text/csv",
+                key="download_willingness_csv",
+            )
+
+        st.markdown("#### Delete Filled Willingness")
+        st.checkbox(
+            "I confirm deletion of all submitted willingness records",
+            key="confirm_delete_willingness",
+        )
+        if st.button("Delete All Willingness", key="delete_all_willingness", type="primary"):
+            if st.session_state.confirm_delete_willingness:
+                empty_df = pd.DataFrame(columns=["Faculty", "Date", "Session"])
+                empty_df.to_excel(WILLINGNESS_FILE, index=False)
+                st.success("All willingness records deleted.")
+                st.session_state.confirm_delete_willingness = False
+                st.rerun()
+            else:
+                st.error("Please confirm deletion before proceeding.")
+
+        if st.button("Lock Admin View", key="lock_admin"):
+            st.session_state.admin_authenticated = False
+            st.success("Admin view locked.")
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
+    st.stop()
 
 # ---------------- FACULTY SELECT ---------------- #
 selected_name = st.selectbox("Select Your Name", sorted(faculty_df["Name"].dropna().unique()))
@@ -242,7 +340,6 @@ faculty_row = faculty_row_df.iloc[0]
 designation = str(faculty_row["Designation"]).strip()
 designation_key = designation.upper()
 
-# ---------------- DUTY STRUCTURE ---------------- #
 duty_structure = {
     "P": 3,
     "ACP": 5,
@@ -263,178 +360,110 @@ offline_options = offline_df[["Date", "Session"]].drop_duplicates().sort_values(
 offline_options["DateOnly"] = offline_options["Date"].dt.date
 valid_dates = sorted([d for d in offline_options["DateOnly"].unique() if d not in valuation_set])
 
-if "selected_faculty" not in st.session_state:
-    st.session_state.selected_faculty = selected_clean
-if "selected_slots" not in st.session_state:
-    st.session_state.selected_slots = []
-if "picked_date" not in st.session_state:
-    st.session_state.picked_date = valid_dates[0] if valid_dates else None
-if "panel_mode" not in st.session_state:
-    st.session_state.panel_mode = "User View"
-if "confirm_delete_willingness" not in st.session_state:
-    st.session_state.confirm_delete_willingness = False
-
 if st.session_state.selected_faculty != selected_clean:
     st.session_state.selected_faculty = selected_clean
     st.session_state.selected_slots = []
     st.session_state.picked_date = valid_dates[0] if valid_dates else None
+if "picked_date" not in st.session_state:
+    st.session_state.picked_date = valid_dates[0] if valid_dates else None
 
-# ---------------- LAYOUT ---------------- #
 left, right = st.columns([1, 1.4])
 
 with left:
-    st.subheader("Control Panel")
-    panel_mode = st.radio(
-        "Choose Mode",
-        ["User View", "Admin View"],
-        horizontal=True,
-        key="panel_mode",
-    )
+    st.subheader("Willingness Selection")
+    st.write(f"**Designation:** {designation}")
+    st.write(f"**Options Required:** {required_count}")
 
-    if panel_mode == "Admin View":
-        st.markdown("### Admin View (Password Protected)")
-        if not st.session_state.admin_authenticated:
-            admin_pass = st.text_input("Admin Password", type="password", key="admin_password")
-            if st.button("Unlock Admin View", key="unlock_admin"):
-                if admin_pass == "sathya":
-                    st.session_state.admin_authenticated = True
-                    st.success("Admin access granted.")
-                    st.rerun()
-                else:
-                    st.error("Invalid admin password.")
-        else:
-            st.success("Admin view unlocked")
-            willingness_admin = load_willingness().drop(columns=["FacultyClean"], errors="ignore")
-            if willingness_admin.empty:
-                st.info("No willingness submissions yet.")
-            else:
-                view_df = willingness_admin.copy().reset_index(drop=True)
-                view_df.insert(0, "Sl.No", view_df.index + 1)
-                st.dataframe(view_df, use_container_width=True, hide_index=True)
-                csv_data = view_df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    "Download Willingness CSV",
-                    data=csv_data,
-                    file_name="Willingness_Admin_View.csv",
-                    mime="text/csv",
-                    key="download_willingness_csv",
-                )
-
-            st.markdown("#### Delete Filled Willingness")
-            st.checkbox(
-                "I confirm deletion of all submitted willingness records",
-                key="confirm_delete_willingness",
-            )
-            if st.button("Delete All Willingness", key="delete_all_willingness", type="primary"):
-                if st.session_state.confirm_delete_willingness:
-                    empty_df = pd.DataFrame(columns=["Faculty", "Date", "Session"])
-                    empty_df.to_excel(WILLINGNESS_FILE, index=False)
-                    st.success("All willingness records deleted.")
-                    st.session_state.confirm_delete_willingness = False
-                    st.rerun()
-                else:
-                    st.error("Please confirm deletion before proceeding.")
-
-            if st.button("Lock Admin View", key="lock_admin"):
-                st.session_state.admin_authenticated = False
-                st.success("Admin view locked.")
-                st.rerun()
-
+    if not valid_dates:
+        st.warning("No selectable offline dates available after valuation blocking.")
     else:
-        st.subheader("Willingness Selection")
-        st.write(f"**Designation:** {designation}")
-        st.write(f"**Options Required:** {required_count}")
+        picked_date = st.selectbox(
+            "Choose Offline Date",
+            valid_dates,
+            key="picked_date",
+            format_func=lambda d: d.strftime("%d-%m-%Y (%A)"),
+        )
 
-        if not valid_dates:
-            st.warning("No selectable offline dates available after valuation blocking.")
-        else:
-            picked_date = st.selectbox(
-                "Choose Offline Date",
-                valid_dates,
-                key="picked_date",
-                format_func=lambda d: d.strftime("%d-%m-%Y (%A)"),
-            )
+        available = set(offline_options[offline_options["DateOnly"] == picked_date]["Session"].dropna().astype(str).str.upper())
+        btn1, btn2 = st.columns(2)
+        with btn1:
+            add_fn = st.button("Add FN", use_container_width=True, disabled=("FN" not in available) or (len(st.session_state.selected_slots) >= required_count))
+        with btn2:
+            add_an = st.button("Add AN", use_container_width=True, disabled=("AN" not in available) or (len(st.session_state.selected_slots) >= required_count))
 
-            available = set(offline_options[offline_options["DateOnly"] == picked_date]["Session"].dropna().astype(str).str.upper())
-            btn1, btn2 = st.columns(2)
-            with btn1:
-                add_fn = st.button("Add FN", use_container_width=True, disabled=("FN" not in available) or (len(st.session_state.selected_slots) >= required_count))
-            with btn2:
-                add_an = st.button("Add AN", use_container_width=True, disabled=("AN" not in available) or (len(st.session_state.selected_slots) >= required_count))
+        def add_slot(session):
+            existing_dates = {item["Date"] for item in st.session_state.selected_slots}
+            slot = {"Date": picked_date, "Session": session}
+            if picked_date in valuation_set:
+                st.warning("Valuation date cannot be selected.")
+            elif picked_date in existing_dates:
+                st.warning("FN and AN on the same date are not allowed.")
+            elif len(st.session_state.selected_slots) >= required_count:
+                st.warning("Required count already reached.")
+            elif slot in st.session_state.selected_slots:
+                st.warning("This date-session is already selected.")
+            else:
+                st.session_state.selected_slots.append(slot)
 
-            def add_slot(session):
-                existing_dates = {item["Date"] for item in st.session_state.selected_slots}
-                slot = {"Date": picked_date, "Session": session}
-                if picked_date in valuation_set:
-                    st.warning("Valuation date cannot be selected.")
-                elif picked_date in existing_dates:
-                    st.warning("FN and AN on the same date are not allowed.")
-                elif len(st.session_state.selected_slots) >= required_count:
-                    st.warning("Required count already reached.")
-                elif slot in st.session_state.selected_slots:
-                    st.warning("This date-session is already selected.")
-                else:
-                    st.session_state.selected_slots.append(slot)
+        if add_fn:
+            add_slot("FN")
+        if add_an:
+            add_slot("AN")
 
-            if add_fn:
-                add_slot("FN")
-            if add_an:
-                add_slot("AN")
+    st.session_state.selected_slots = st.session_state.selected_slots[:required_count]
+    st.write(f"**Selected:** {len(st.session_state.selected_slots)} / {required_count}")
 
-        st.session_state.selected_slots = st.session_state.selected_slots[:required_count]
-        st.write(f"**Selected:** {len(st.session_state.selected_slots)} / {required_count}")
+    selected_df = pd.DataFrame(st.session_state.selected_slots)
+    if not selected_df.empty:
+        selected_df = selected_df.sort_values(["Date", "Session"]).copy().reset_index(drop=True)
+        selected_df.insert(0, "Sl.No", selected_df.index + 1)
+        selected_df["Day"] = pd.to_datetime(selected_df["Date"]).dt.day_name()
+        selected_df["Date"] = pd.to_datetime(selected_df["Date"]).dt.strftime("%d-%m-%Y")
+        st.dataframe(selected_df[["Sl.No", "Date", "Day", "Session"]], use_container_width=True, hide_index=True)
 
-        selected_df = pd.DataFrame(st.session_state.selected_slots)
-        if not selected_df.empty:
-            selected_df = selected_df.sort_values(["Date", "Session"]).copy().reset_index(drop=True)
-            selected_df.insert(0, "Sl.No", selected_df.index + 1)
-            selected_df["Day"] = pd.to_datetime(selected_df["Date"]).dt.day_name()
-            selected_df["Date"] = pd.to_datetime(selected_df["Date"]).dt.strftime("%d-%m-%Y")
-            st.dataframe(selected_df[["Sl.No", "Date", "Day", "Session"]], use_container_width=True, hide_index=True)
-
-            remove_sl = st.selectbox("Select Sl.No to remove", options=selected_df["Sl.No"].tolist(), format_func=lambda x: f"{x}")
-            if st.button("Remove Selected Row", use_container_width=True):
-                target_row = selected_df[selected_df["Sl.No"] == remove_sl].iloc[0]
-                target_date = pd.to_datetime(target_row["Date"], dayfirst=True).date()
-                target_session = target_row["Session"]
-                st.session_state.selected_slots = [
-                    s for s in st.session_state.selected_slots
-                    if not (s["Date"] == target_date and s["Session"] == target_session)
-                ]
-
-        willingness_df = load_willingness()
-        already_submitted = False
-        if "FacultyClean" in willingness_df.columns:
-            already_submitted = selected_clean in set(willingness_df["FacultyClean"].astype(str).tolist())
-
-        st.markdown("### Submit Willingness")
-        if already_submitted:
-            st.warning("You have already submitted willingness.")
-
-        remaining = max(required_count - len(st.session_state.selected_slots), 0)
-        if already_submitted:
-            st.info("Verification: Submission already exists for this faculty.")
-        elif remaining == 0 and required_count > 0:
-            st.success("Verification: Required willingness count completed. You can submit now.")
-        else:
-            st.info(f"Verification: Select {remaining} more option(s) to enable submission.")
-
-        submit_disabled = already_submitted or len(st.session_state.selected_slots) != required_count
-        submitted = st.button("Submit Willingness", disabled=submit_disabled, use_container_width=True)
-        if submitted:
-            new_rows = [
-                {"Faculty": selected_name, "Date": item["Date"].strftime("%d-%m-%Y"), "Session": item["Session"]}
-                for item in st.session_state.selected_slots
+        remove_sl = st.selectbox("Select Sl.No to remove", options=selected_df["Sl.No"].tolist(), format_func=lambda x: f"{x}")
+        if st.button("Remove Selected Row", use_container_width=True):
+            target_row = selected_df[selected_df["Sl.No"] == remove_sl].iloc[0]
+            target_date = pd.to_datetime(target_row["Date"], dayfirst=True).date()
+            target_session = target_row["Session"]
+            st.session_state.selected_slots = [
+                s for s in st.session_state.selected_slots
+                if not (s["Date"] == target_date and s["Session"] == target_session)
             ]
-            out_df = pd.concat([willingness_df.drop(columns=["FacultyClean"], errors="ignore"), pd.DataFrame(new_rows)], ignore_index=True)
-            out_df.to_excel(WILLINGNESS_FILE, index=False)
-            st.toast("The University Examination Committee thanks you for submitting your willingness.", icon="✅")
-            st.success(
-                "The University Examination Committee thanks you for submitting your willingness. "
-                "The final duty allocation will be carried out using AI-assisted optimization integrated with Google OR-Tools. "
-                "Once finalized, the allocation will be officially communicated. Kindly check this portal regularly for updates."
-            )
-            st.session_state.selected_slots = []
+
+    willingness_df = load_willingness()
+    already_submitted = False
+    if "FacultyClean" in willingness_df.columns:
+        already_submitted = selected_clean in set(willingness_df["FacultyClean"].astype(str).tolist())
+
+    st.markdown("### Submit Willingness")
+    if already_submitted:
+        st.warning("You have already submitted willingness.")
+
+    remaining = max(required_count - len(st.session_state.selected_slots), 0)
+    if already_submitted:
+        st.info("Verification: Submission already exists for this faculty.")
+    elif remaining == 0 and required_count > 0:
+        st.success("Verification: Required willingness count completed. You can submit now.")
+    else:
+        st.info(f"Verification: Select {remaining} more option(s) to enable submission.")
+
+    submit_disabled = already_submitted or len(st.session_state.selected_slots) != required_count
+    submitted = st.button("Submit Willingness", disabled=submit_disabled, use_container_width=True)
+    if submitted:
+        new_rows = [
+            {"Faculty": selected_name, "Date": item["Date"].strftime("%d-%m-%Y"), "Session": item["Session"]}
+            for item in st.session_state.selected_slots
+        ]
+        out_df = pd.concat([willingness_df.drop(columns=["FacultyClean"], errors="ignore"), pd.DataFrame(new_rows)], ignore_index=True)
+        out_df.to_excel(WILLINGNESS_FILE, index=False)
+        st.toast("The University Examination Committee thanks you for submitting your willingness.", icon="✅")
+        st.success(
+            "The University Examination Committee thanks you for submitting your willingness. "
+            "The final duty allocation will be carried out using AI-assisted optimization integrated with Google OR-Tools. "
+            "Once finalized, the allocation will be officially communicated. Kindly check this portal regularly for updates."
+        )
+        st.session_state.selected_slots = []
 
 with right:
     render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
