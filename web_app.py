@@ -19,11 +19,11 @@ def clean(x):
     return str(x).strip().lower()
 
 
-def load_excel(file):
-    if not os.path.exists(file):
-        st.error(f"{file} not found in repository.")
+def load_excel(path):
+    if not os.path.exists(path):
+        st.error(f"{path} not found in repository.")
         st.stop()
-    return pd.read_excel(file)
+    return pd.read_excel(path)
 
 
 # ---------------- LOAD DATA ---------------- #
@@ -62,11 +62,11 @@ online_df["Date"] = pd.to_datetime(online_df["Date"], dayfirst=True)
 if os.path.exists(LOGO_FILE):
     st.image(LOGO_FILE, use_container_width=True)
 
-st.markdown("## SASTRA SoME End Semester Examination Duty Portal")
-st.markdown("### School of Mechanical Engineering")
+st.title("SASTRA SoME End Semester Examination Duty Portal")
+st.subheader("School of Mechanical Engineering")
 st.markdown("---")
 
-st.info("Official Notice: Willingness will be accommodated as much as possible based on institutional requirements.")
+st.info("Official Notice: Willingness choices will be accommodated as much as possible.")
 
 
 # ---------------- FACULTY SELECT ---------------- #
@@ -78,11 +78,10 @@ selected_name = st.selectbox(
 
 selected_clean = clean(selected_name)
 faculty_row = faculty_df[faculty_df["Clean"] == selected_clean]
-
 designation = faculty_row.iloc[0]["Designation"]
 
 
-# ---------------- DUTY STRUCTURE ---------------- #
+# ---------------- DUTY RULES ---------------- #
 
 duty_structure = {
     "P": 3,
@@ -99,11 +98,11 @@ required_count = duty_structure.get(designation, 0)
 
 # ---------------- LAYOUT ---------------- #
 
-col1, col2 = st.columns(2)
+left, right = st.columns(2)
 
-# -------- LEFT: WILLINGNESS -------- #
+# ---------- LEFT: WILLINGNESS ---------- #
 
-with col1:
+with left:
     st.subheader("Willingness Selection")
     st.write("Designation:", designation)
     st.write("Options Required:", required_count)
@@ -144,33 +143,32 @@ with col1:
         st.success("Willingness submitted successfully!")
 
 
-# -------- RIGHT: DUTY VIEW -------- #
+# ---------- RIGHT: DUTY VIEW ---------- #
 
-with col2:
+with right:
     st.subheader("Offline Duty Dates")
 
-    offline_view = offline_df.copy()
-    offline_view["Date"] = offline_view["Date"].dt.date
-    offline_view["Day"] = pd.to_datetime(offline_view["Date"]).dt.day_name()
+    off_view = offline_df.copy()
+    off_view["Date"] = off_view["Date"].dt.date
+    off_view["Day"] = pd.to_datetime(off_view["Date"]).dt.day_name()
 
     st.dataframe(
-        offline_view[["Date", "Day", "Session"]],
+        off_view[["Date", "Day", "Session"]],
         use_container_width=True,
         hide_index=True
     )
 
     st.subheader("Online Duty Dates")
 
-    online_view = online_df.copy()
-    online_view["Date"] = online_view["Date"].dt.date
-    online_view["Day"] = pd.to_datetime(online_view["Date"]).dt.day_name()
+    on_view = online_df.copy()
+    on_view["Date"] = on_view["Date"].dt.date
+    on_view["Day"] = pd.to_datetime(on_view["Date"]).dt.day_name()
 
     st.dataframe(
-        online_view[["Date", "Day", "Session"]],
+        on_view[["Date", "Day", "Session"]],
         use_container_width=True,
         hide_index=True
     )
-
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
