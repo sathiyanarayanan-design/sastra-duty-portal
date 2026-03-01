@@ -278,13 +278,15 @@ if "selected_faculty" not in st.session_state:
     st.session_state.selected_faculty = ""
 if "acp_notice_shown_for" not in st.session_state:
     st.session_state.acp_notice_shown_for = ""
+if "user_panel_mode" not in st.session_state:
+    st.session_state.user_panel_mode = "Willingness"
 
 # Control panel at top as requested
 st.subheader("Control Panel")
-st.caption("Admin View is available here. Please choose User View or Admin View.")
+st.caption("Menu: choose Admin View or User View. Under User View, choose Willingness or Allotment.")
 panel_mode = st.radio(
-    "Choose Mode",
-    ["User View", "Admin View"],
+    "Main Menu",
+    ["Admin View", "User View"],
     horizontal=True,
     key="panel_mode",
 )
@@ -338,6 +340,19 @@ if panel_mode == "Admin View":
             st.success("Admin view locked.")
             st.rerun()
 
+    st.markdown("---")
+    st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
+    st.stop()
+
+user_panel_mode = st.radio(
+    "User View Menu",
+    ["Willingness", "Allotment"],
+    horizontal=True,
+    key="user_panel_mode",
+)
+
+if user_panel_mode == "Allotment":
+    st.info("Currently willingness registration is under progress. Allotment will be shown later.")
     st.markdown("---")
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
     st.stop()
