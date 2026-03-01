@@ -269,7 +269,7 @@ st.markdown(
 if "admin_authenticated" not in st.session_state:
     st.session_state.admin_authenticated = False
 if "panel_mode" not in st.session_state:
-    st.session_state.panel_mode = "User View"
+    st.session_state.panel_mode = "Admin View"
 if "confirm_delete_willingness" not in st.session_state:
     st.session_state.confirm_delete_willingness = False
 if "selected_slots" not in st.session_state:
