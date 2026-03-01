@@ -209,6 +209,9 @@ if not st.session_state.logged_in:
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
     st.stop()
 
+if "admin_authenticated" not in st.session_state:
+    st.session_state.admin_authenticated = False
+
 
 # ---------------- LOAD DATA ---------------- #
 faculty_df = load_excel(FACULTY_FILE)
@@ -259,6 +262,39 @@ valuation_set = set(valuation_dates)
 offline_options = offline_df[["Date", "Session"]].drop_duplicates().sort_values(["Date", "Session"])
 offline_options["DateOnly"] = offline_options["Date"].dt.date
 valid_dates = sorted([d for d in offline_options["DateOnly"].unique() if d not in valuation_set])
+
+# ---------------- ADMIN VIEW ---------------- #
+with st.expander("Admin View (Password Protected)", expanded=False):
+    if not st.session_state.admin_authenticated:
+        admin_pass = st.text_input("Admin Password", type="password", key="admin_password")
+        if st.button("Unlock Admin View", key="unlock_admin"):
+            if admin_pass == "sathya":
+                st.session_state.admin_authenticated = True
+                st.success("Admin access granted.")
+                st.rerun()
+            else:
+                st.error("Invalid admin password.")
+    else:
+        st.success("Admin view unlocked")
+        willingness_admin = load_willingness().drop(columns=["FacultyClean"], errors="ignore")
+        if willingness_admin.empty:
+            st.info("No willingness submissions yet.")
+        else:
+            view_df = willingness_admin.copy().reset_index(drop=True)
+            view_df.insert(0, "Sl.No", view_df.index + 1)
+            st.dataframe(view_df, use_container_width=True, hide_index=True)
+            csv_data = view_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download Willingness CSV",
+                data=csv_data,
+                file_name="Willingness_Admin_View.csv",
+                mime="text/csv",
+                key="download_willingness_csv",
+            )
+        if st.button("Lock Admin View", key="lock_admin"):
+            st.session_state.admin_authenticated = False
+            st.success("Admin view locked.")
+            st.rerun()
 
 if "selected_faculty" not in st.session_state:
     st.session_state.selected_faculty = selected_clean
