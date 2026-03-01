@@ -1,4 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/web_app.py b/web_app.py
 index 701a6c8cc53188a57da2c35d09312e4d178a4ed0..5a4be731057ebfc3e9a07badc1103f26458fc6bd 100644
 --- a/web_app.py
@@ -406,6 +405,3 @@ index 701a6c8cc53188a57da2c35d09312e4d178a4ed0..5a4be731057ebfc3e9a07badc1103f26
 +
 +st.markdown("---")
 +st.markdown("Curated by Dr. N. Sathiya Narayanan, School of Mechanical Engineering")
- 
-EOF
-)
