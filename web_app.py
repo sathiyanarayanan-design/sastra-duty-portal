@@ -38,111 +38,112 @@ def load_excel(file_path):
 def normalize_duty_df(df):
     df = df.copy()
     df.columns = df.columns.str.strip()
-
     if len(df.columns) < 3:
         st.error("Duty files must include Date, Session, and Required columns.")
         st.stop()
 
-    df.rename(columns={
-        df.columns[0]: "Date",
-        df.columns[1]: "Session",
-        df.columns[2]: "Required"
-    }, inplace=True)
-
+    df.rename(
+        columns={
+            df.columns[0]: "Date",
+            df.columns[1]: "Session",
+            df.columns[2]: "Required",
+        },
+        inplace=True,
+    )
     df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
-    df = df.dropna(subset=["Date"])
+    df = df.dropna(subset=["Date"]).copy()
     df["Session"] = df["Session"].apply(normalize_session)
     df["Required"] = pd.to_numeric(df["Required"], errors="coerce").fillna(1).astype(int)
-
     return df
 
 
-def valuation_dates_for_faculty(row):
+def valuation_dates_for_faculty(faculty_row):
     dates = []
     for col in ["V1", "V2", "V3", "V4", "V5"]:
-        if col in row.index and pd.notna(row[col]):
-            dates.append(pd.to_datetime(row[col], dayfirst=True).date())
+        if col in faculty_row.index and pd.notna(faculty_row[col]):
+            dates.append(pd.to_datetime(faculty_row[col], dayfirst=True).date())
     return sorted(set(dates))
 
 
-def demand_category(req, min_d, max_d):
-    if max_d == min_d:
-        return "Medium"
-    gap = (max_d - min_d) / 3
-    if req <= min_d + gap:
+def demand_category(required, min_d, max_d):
+    gap = (max_d - min_d) / 3 if max_d != min_d else 1
+    low_max = round(min_d + gap)
+    mid_max = round(min_d + 2 * gap)
+    if required <= low_max:
         return "Low"
-    elif req <= min_d + 2 * gap:
+    if required <= mid_max:
         return "Medium"
     return "High"
 
 
-def build_calendar(duty_df, valuation_dates, year, month):
-    duty_sum = duty_df.groupby("Date")["Required"].sum().reset_index()
-    demand_map = {d.date(): r for d, r in zip(duty_sum["Date"], duty_sum["Required"])}
+def build_month_calendar_frame(duty_df, valuation_dates, year, month):
+    duty_demand = duty_df.groupby("Date", as_index=False)["Required"].sum()
+    demand_map = {d.date(): int(r) for d, r in zip(duty_demand["Date"], duty_demand["Required"])}
 
-    start = pd.Timestamp(year=year, month=month, day=1)
-    end = start + pd.offsets.MonthEnd(0)
-    days = pd.date_range(start, end)
+    month_start = pd.Timestamp(year=year, month=month, day=1)
+    month_end = month_start + pd.offsets.MonthEnd(0)
+    month_days = pd.date_range(month_start, month_end, freq="D")
 
-    min_d = min(demand_map.values()) if demand_map else 0
-    max_d = max(demand_map.values()) if demand_map else 1
+    month_demands = [demand_map.get(dt.date(), 0) for dt in month_days]
+    min_d = min(month_demands) if month_demands else 0
+    max_d = max(month_demands) if month_demands else 1
 
+    first_weekday = month_start.weekday()  # Mon=0
     rows = []
-    for d in days:
-        date_only = d.date()
-        req = demand_map.get(date_only, 0)
+    weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for dt in month_days:
+        week_no = ((dt.day + first_weekday - 1) // 7) + 1
+        req = demand_map.get(dt.date(), 0)
 
-        if date_only in valuation_dates:
-            cat = "Valuation Locked"
+        if dt.date() in valuation_dates:
+            category = "Valuation Locked"
         elif req == 0:
-            cat = "No Duty"
+            category = "No Duty"
         else:
-            cat = demand_category(req, min_d, max_d)
+            category = demand_category(req, min_d, max_d)
 
-        rows.append({
-            "Date": d,
-            "Day": d.day,
-            "Weekday": d.strftime("%a"),
-            "Week": (d.day + start.weekday() - 1) // 7 + 1,
-            "Required": req,
-            "Category": cat
-        })
-
+        rows.append(
+            {
+                "Date": dt,
+                "Week": week_no,
+                "Weekday": weekday_labels[dt.weekday()],
+                "DayNum": dt.day,
+                "Required": req,
+                "Category": category,
+                "DateLabel": dt.strftime("%d-%m-%Y"),
+            }
+        )
     return pd.DataFrame(rows)
 
 
-def render_calendar(duty_df, valuation_dates, title):
-    st.subheader(title)
-
+def render_month_calendars(duty_df, valuation_dates, title):
+    st.markdown(f"#### {title}")
     months = sorted({(d.year, d.month) for d in duty_df["Date"]})
 
     color_scale = alt.Scale(
         domain=["No Duty", "Low", "Medium", "High", "Valuation Locked"],
-        range=["#eeeeee", "#4caf50", "#ff9800", "#f44336", "#7b1fa2"]
+        range=["#ececec", "#2ca02c", "#ff9800", "#d62728", "#7b1fa2"],
     )
 
     for year, month in months:
-        frame = build_calendar(duty_df, valuation_dates, year, month)
-
+        frame = build_month_calendar_frame(duty_df, set(valuation_dates), year, month)
         st.markdown(f"**{calmod.month_name[month]} {year}**")
 
         base = alt.Chart(frame).encode(
-            x=alt.X("Weekday:N",
-                    sort=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
-                    title=""),
-            y=alt.Y("Week:O", title="")
+            x=alt.X("Weekday:N", sort=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], title=""),
+            y=alt.Y("Week:O", sort="ascending", title=""),
+            tooltip=[
+                alt.Tooltip("DateLabel:N", title="Date"),
+                alt.Tooltip("Required:Q", title="Demand"),
+                alt.Tooltip("Category:N", title="Category"),
+            ],
         )
 
-        rect = base.mark_rect().encode(
-            color=alt.Color("Category:N",
-                            scale=color_scale,
-                            legend=alt.Legend(title="Heat Map Legend"))
+        rect = base.mark_rect(stroke="white").encode(
+            color=alt.Color("Category:N", scale=color_scale, legend=alt.Legend(title="Heat Map"))
         )
-
-        text = base.mark_text(color="black").encode(text="Day:Q")
-
-        st.altair_chart((rect + text).properties(height=220),
-                        use_container_width=True)
+        text = base.mark_text(color="black", fontSize=12).encode(text="DayNum:Q")
+        st.altair_chart((rect + text).properties(height=220), use_container_width=True)
 
 
 def load_willingness():
@@ -155,23 +156,34 @@ def load_willingness():
     return pd.DataFrame(columns=["Faculty", "Date", "Session", "FacultyClean"])
 
 
+def render_branding_header(show_logo=True):
+    if show_logo and os.path.exists(LOGO_FILE):
+        st.image(LOGO_FILE, use_container_width=True)
+
+    st.markdown("## SASTRA SoME End Semester Examination Duty Portal")
+    st.markdown("### School of Mechanical Engineering")
+    st.markdown("---")
+
+
 # ---------------- LOGIN ---------------- #
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("SASTRA SoME End Semester Examination Duty Portal")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        if username == "SASTRA" and password == "SASTRA":
-            st.session_state.logged_in = True
-            st.rerun()
-        else:
-            st.error("Invalid Credentials")
+    render_branding_header(show_logo=True)
+    st.info("Official Notice: Willingness will be accommodated as much as possible based on institutional requirements.")
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        st.subheader("Faculty Login")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if username == "SASTRA" and password == "SASTRA":
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
     st.stop()
-
 
 # ---------------- LOAD DATA ---------------- #
 faculty_df = load_excel(FACULTY_FILE)
@@ -179,25 +191,30 @@ offline_df = normalize_duty_df(load_excel(OFFLINE_FILE))
 online_df = normalize_duty_df(load_excel(ONLINE_FILE))
 
 faculty_df.columns = faculty_df.columns.str.strip()
-faculty_df.rename(columns={
-    faculty_df.columns[0]: "Name",
-    faculty_df.columns[1]: "Designation"
-}, inplace=True)
+if len(faculty_df.columns) < 2:
+    st.error("Faculty_Master.xlsx must include Name and Designation columns.")
+    st.stop()
 
+faculty_df.rename(columns={faculty_df.columns[0]: "Name", faculty_df.columns[1]: "Designation"}, inplace=True)
 faculty_df["Clean"] = faculty_df["Name"].apply(clean)
 
-# ---------------- MAIN ---------------- #
-st.title("SASTRA SoME End Semester Examination Portal")
+# ---------------- HEADER ---------------- #
+render_branding_header(show_logo=False)
+st.info("Official Notice: Willingness will be accommodated as much as possible based on institutional requirements.")
 
-selected_name = st.selectbox("Select Your Name",
-                             sorted(faculty_df["Name"].unique()))
-
+# ---------------- FACULTY SELECT ---------------- #
+selected_name = st.selectbox("Select Your Name", sorted(faculty_df["Name"].dropna().unique()))
 selected_clean = clean(selected_name)
-row = faculty_df[faculty_df["Clean"] == selected_clean].iloc[0]
+faculty_row_df = faculty_df[faculty_df["Clean"] == selected_clean]
+if faculty_row_df.empty:
+    st.error("Selected faculty not found in Faculty_Master.xlsx")
+    st.stop()
 
-designation = str(row["Designation"]).strip()
+faculty_row = faculty_row_df.iloc[0]
+designation = str(faculty_row["Designation"]).strip()
 designation_key = designation.upper()
 
+# ---------------- DUTY STRUCTURE ---------------- #
 duty_structure = {
     "P": 3,
     "ACP": 5,
@@ -207,25 +224,140 @@ duty_structure = {
     "TA": 9,
     "RA": 9,
 }
-
 required_count = duty_structure.get(designation_key, 0)
-valuation_dates = valuation_dates_for_faculty(row)
+if required_count == 0:
+    st.warning("Designation rule not found. Please verify designation values in Faculty_Master.xlsx.")
 
-st.write(f"**Designation:** {designation}")
-st.write(f"**Options Required:** {required_count}")
-st.write(f"**Blocked Dates:** {valuation_dates if valuation_dates else 'None'}")
+valuation_dates = valuation_dates_for_faculty(faculty_row)
+valuation_set = set(valuation_dates)
 
-# ---------------- CALENDAR DISPLAY ---------------- #
-col1, col2 = st.columns(2)
+offline_options = offline_df[["Date", "Session"]].drop_duplicates().sort_values(["Date", "Session"])
+offline_options["DateOnly"] = offline_options["Date"].dt.date
+valid_dates = sorted([d for d in offline_options["DateOnly"].unique() if d not in valuation_set])
 
-with col1:
-    render_calendar(offline_df, set(valuation_dates),
-                    "Offline Duty Calendar")
+if "selected_faculty" not in st.session_state:
+    st.session_state.selected_faculty = selected_clean
+if "selected_slots" not in st.session_state:
+    st.session_state.selected_slots = []
+if "picked_date" not in st.session_state:
+    st.session_state.picked_date = valid_dates[0] if valid_dates else None
 
-with col2:
-    if designation_key in {"P", "ACP"}:
-        render_calendar(online_df, set(valuation_dates),
-                        "Online Duty Calendar")
+if st.session_state.selected_faculty != selected_clean:
+    st.session_state.selected_faculty = selected_clean
+    st.session_state.selected_slots = []
+    st.session_state.picked_date = valid_dates[0] if valid_dates else None
+
+# ---------------- LAYOUT ---------------- #
+left, right = st.columns([1, 1.4])
+
+with left:
+    st.subheader("Willingness Selection")
+    st.write(f"**Designation:** {designation}")
+    st.write(f"**Options Required:** {required_count}")
+
+    # requested: do not start willingness by default, only after user adds
+    if not valid_dates:
+        st.warning("No selectable offline dates available after valuation blocking.")
+    else:
+        picked_date = st.selectbox(
+            "Choose Offline Date",
+            valid_dates,
+            key="picked_date",
+            format_func=lambda d: d.strftime("%d-%m-%Y (%A)"),
+        )
+
+        available = set(offline_options[offline_options["DateOnly"] == picked_date]["Session"].dropna().astype(str).str.upper())
+        btn1, btn2 = st.columns(2)
+        with btn1:
+            add_fn = st.button(
+                "Add FN",
+                use_container_width=True,
+                disabled=("FN" not in available) or (len(st.session_state.selected_slots) >= required_count),
+            )
+        with btn2:
+            add_an = st.button(
+                "Add AN",
+                use_container_width=True,
+                disabled=("AN" not in available) or (len(st.session_state.selected_slots) >= required_count),
+            )
+
+        def add_slot(session):
+            existing_dates = {item["Date"] for item in st.session_state.selected_slots}
+            slot = {"Date": picked_date, "Session": session}
+            if picked_date in valuation_set:
+                st.warning("Valuation date cannot be selected.")
+            elif picked_date in existing_dates:
+                st.warning("FN and AN on the same date are not allowed.")
+            elif len(st.session_state.selected_slots) >= required_count:
+                st.warning("Required count already reached.")
+            elif slot in st.session_state.selected_slots:
+                st.warning("This date-session is already selected.")
+            else:
+                st.session_state.selected_slots.append(slot)
+
+        if add_fn:
+            add_slot("FN")
+        if add_an:
+            add_slot("AN")
+
+    st.session_state.selected_slots = st.session_state.selected_slots[:required_count]
+    st.write(f"**Selected:** {len(st.session_state.selected_slots)} / {required_count}")
+
+    selected_df = pd.DataFrame(st.session_state.selected_slots)
+    if not selected_df.empty:
+        selected_df = selected_df.sort_values(["Date", "Session"]).copy().reset_index(drop=True)
+        selected_df.insert(0, "Sl.No", selected_df.index + 1)
+        selected_df["Day"] = pd.to_datetime(selected_df["Date"]).dt.day_name()
+        selected_df["Date"] = pd.to_datetime(selected_df["Date"]).dt.strftime("%d-%m-%Y")
+        st.dataframe(selected_df[["Sl.No", "Date", "Day", "Session"]], use_container_width=True, hide_index=True)
+
+        remove_sl = st.selectbox(
+            "Select Sl.No to remove",
+            options=selected_df["Sl.No"].tolist(),
+            format_func=lambda x: f"{x}",
+        )
+        if st.button("Remove Selected Row", use_container_width=True):
+            target_row = selected_df[selected_df["Sl.No"] == remove_sl].iloc[0]
+            target_date = pd.to_datetime(target_row["Date"], dayfirst=True).date()
+            target_session = target_row["Session"]
+            st.session_state.selected_slots = [
+                s for s in st.session_state.selected_slots
+                if not (s["Date"] == target_date and s["Session"] == target_session)
+            ]
+
+    willingness_df = load_willingness()
+    already_submitted = False
+    if "FacultyClean" in willingness_df.columns:
+        already_submitted = selected_clean in set(willingness_df["FacultyClean"].astype(str).tolist())
+
+    st.markdown("### Submit Willingness")
+    if already_submitted:
+        st.warning("You have already submitted willingness.")
+
+    remaining = max(required_count - len(st.session_state.selected_slots), 0)
+    if already_submitted:
+        st.info("Verification: Submission already exists for this faculty.")
+    elif remaining == 0 and required_count > 0:
+        st.success("Verification: Required willingness count completed. You can submit now.")
+    else:
+        st.info(f"Verification: Select {remaining} more option(s) to enable submission.")
+
+    submit_disabled = already_submitted or len(st.session_state.selected_slots) != required_count
+    submitted = st.button("Submit Willingness", disabled=submit_disabled, use_container_width=True)
+    if submitted:
+        new_rows = [
+            {"Faculty": selected_name, "Date": item["Date"].strftime("%d-%m-%Y"), "Session": item["Session"]}
+            for item in st.session_state.selected_slots
+        ]
+        out_df = pd.concat([willingness_df.drop(columns=["FacultyClean"], errors="ignore"), pd.DataFrame(new_rows)], ignore_index=True)
+        out_df.to_excel(WILLINGNESS_FILE, index=False)
+        st.success("Willingness submitted successfully!")
+        st.session_state.selected_slots = []
+
+with right:
+    render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
+    if designation in {"P", "ACP"}:
+        render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
