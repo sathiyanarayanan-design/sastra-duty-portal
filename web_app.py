@@ -265,6 +265,8 @@ if "selected_slots" not in st.session_state:
     st.session_state.selected_slots = []
 if "selected_faculty" not in st.session_state:
     st.session_state.selected_faculty = ""
+if "acp_notice_shown_for" not in st.session_state:
+    st.session_state.acp_notice_shown_for = ""
 
 # Control panel at top as requested
 st.subheader("Control Panel")
@@ -359,7 +361,20 @@ valuation_set = set(valuation_dates)
 
 offline_options = offline_df[["Date", "Session"]].drop_duplicates().sort_values(["Date", "Session"])
 offline_options["DateOnly"] = offline_options["Date"].dt.date
-valid_dates = sorted([d for d in offline_options["DateOnly"].unique() if d not in valuation_set])
+online_options = online_df[["Date", "Session"]].drop_duplicates().sort_values(["Date", "Session"])
+online_options["DateOnly"] = online_options["Date"].dt.date
+
+if designation_key == "P":
+    selection_options = online_options
+    selection_label = "Choose Online Date"
+elif designation_key == "ACP":
+    selection_options = offline_options
+    selection_label = "Choose Offline Date"
+else:
+    selection_options = offline_options
+    selection_label = "Choose Offline Date"
+
+valid_dates = sorted([d for d in selection_options["DateOnly"].unique() if d not in valuation_set])
 
 if st.session_state.selected_faculty != selected_clean:
     st.session_state.selected_faculty = selected_clean
@@ -375,17 +390,28 @@ with left:
     st.write(f"**Designation:** {designation}")
     st.write(f"**Options Required:** {required_count}")
 
+    if designation_key == "ACP":
+        acp_message = (
+            "Dear Sir, ACP faculty members will be given with one online and one offline duty. "
+            "We request to give all your willingness for offline date based calendar. "
+            "We will fix it for online and offline accordingly."
+        )
+        st.info(acp_message)
+        if st.session_state.acp_notice_shown_for != selected_clean:
+            st.session_state.acp_notice_shown_for = selected_clean
+            st.toast(acp_message, icon="ℹ️")
+
     if not valid_dates:
-        st.warning("No selectable offline dates available after valuation blocking.")
+        st.warning(f"No selectable {selection_label.replace('Choose ', '').lower()} available after valuation blocking.")
     else:
         picked_date = st.selectbox(
-            "Choose Offline Date",
+            selection_label,
             valid_dates,
             key="picked_date",
             format_func=lambda d: d.strftime("%d-%m-%Y (%A)"),
         )
 
-        available = set(offline_options[offline_options["DateOnly"] == picked_date]["Session"].dropna().astype(str).str.upper())
+        available = set(selection_options[selection_options["DateOnly"] == picked_date]["Session"].dropna().astype(str).str.upper())
         btn1, btn2 = st.columns(2)
         with btn1:
             add_fn = st.button("Add FN", use_container_width=True, disabled=("FN" not in available) or (len(st.session_state.selected_slots) >= required_count))
@@ -467,9 +493,12 @@ with left:
         st.session_state.selected_slots = []
 
 with right:
-    render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
-    if designation_key in {"P", "ACP"}:
+    if designation_key == "P":
         render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
+    else:
+        render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
+        if designation_key == "ACP":
+            render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
