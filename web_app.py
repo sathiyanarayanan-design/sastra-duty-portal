@@ -461,11 +461,6 @@
 +
 +
 +faculty_portal()
-diff --git a/web_app.py b/web_app.py
-index 701a6c8cc53188a57da2c35d09312e4d178a4ed0..73db6bdbb236713c06ad37e8fbfd0cd2b9c0bf23 100644
---- a/web_app.py
-+++ b/web_app.py
-@@ -1,201 +1,241 @@
 -import streamlit as st
 -import pandas as pd
 -
