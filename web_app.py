@@ -1,4 +1,5 @@
 import os
+import calendar as calmod
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -14,27 +15,33 @@ st.set_page_config(page_title="SASTRA Duty Portal", layout="wide")
 
 
 # ---------------- FUNCTIONS ---------------- #
-
 def clean(x):
     return str(x).strip().lower()
 
 
-def load_excel(path):
-    if not os.path.exists(path):
-        st.error(f"{path} not found in repository.")
+def load_excel(file_path):
+    if not os.path.exists(file_path):
+        st.error(f"{file_path} not found in repository.")
         st.stop()
-    return pd.read_excel(path)
+    return pd.read_excel(file_path)
 
 
 def normalize_duty_df(df):
     df = df.copy()
     df.columns = df.columns.str.strip()
 
-    df.rename(columns={
-        df.columns[0]: "Date",
-        df.columns[1]: "Session",
-        df.columns[2]: "Required"
-    }, inplace=True)
+    if len(df.columns) < 3:
+        st.error("Duty files must include Date, Session, and Required columns.")
+        st.stop()
+
+    df.rename(
+        columns={
+            df.columns[0]: "Date",
+            df.columns[1]: "Session",
+            df.columns[2]: "Required",
+        },
+        inplace=True,
+    )
 
     df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
     df = df.dropna(subset=["Date"])
@@ -52,75 +59,142 @@ def valuation_dates_for_faculty(row):
     return sorted(set(dates))
 
 
-def render_heatmap(duty_df, valuation_set, title):
-    st.subheader(title)
-
-    demand = duty_df.groupby("Date", as_index=False)["Required"].sum()
-
-    min_d = demand["Required"].min()
-    max_d = demand["Required"].max()
+def demand_category(required, min_d, max_d):
     gap = (max_d - min_d) / 3 if max_d != min_d else 1
     low_max = round(min_d + gap)
     mid_max = round(min_d + 2 * gap)
 
-    def category(row):
-        dt = row["Date"].date()
-        if dt in valuation_set:
-            return "Valuation Locked"
-        if row["Required"] <= low_max:
-            return "Low"
-        if row["Required"] <= mid_max:
-            return "Medium"
-        return "High"
+    if required <= low_max:
+        return "Low"
+    if required <= mid_max:
+        return "Medium"
+    return "High"
 
-    demand["Category"] = demand.apply(category, axis=1)
-    demand["Day"] = demand["Date"].dt.day
-    demand["Month"] = demand["Date"].dt.strftime("%b-%Y")
 
-    chart = (
-        alt.Chart(demand)
-        .mark_rect(stroke="white")
-        .encode(
-            x=alt.X("day(Date):O", title="Day"),
-            y=alt.Y("yearmonth(Date):O", title="Month"),
-            color=alt.Color(
-                "Category:N",
-                scale=alt.Scale(
-                    domain=["Low", "Medium", "High", "Valuation Locked"],
-                    range=["#2ca02c", "#ff9800", "#d62728", "#7b1fa2"],
-                ),
-            ),
-            tooltip=["Date:T", "Required:Q", "Category:N"],
+def build_month_calendar_frame(duty_df, valuation_dates, year, month):
+    duty_demand = duty_df.groupby("Date", as_index=False)["Required"].sum()
+    demand_map = {
+        d.date(): int(r) for d, r in zip(duty_demand["Date"], duty_demand["Required"])
+    }
+
+    month_start = pd.Timestamp(year=year, month=month, day=1)
+    month_end = month_start + pd.offsets.MonthEnd(0)
+    month_days = pd.date_range(month_start, month_end, freq="D")
+
+    month_demands = [demand_map.get(dt.date(), 0) for dt in month_days]
+    min_d = min(month_demands) if month_demands else 0
+    max_d = max(month_demands) if month_demands else 1
+
+    weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    rows = []
+    for dt in month_days:
+        req = demand_map.get(dt.date(), 0)
+
+        if dt.date() in valuation_dates:
+            category = "Valuation Locked"
+        elif req == 0:
+            category = "No Duty"
+        else:
+            category = demand_category(req, min_d, max_d)
+
+        rows.append(
+            {
+                "Date": dt,
+                "Week": dt.week,
+                "Weekday": weekday_labels[dt.weekday()],
+                "DayNum": dt.day,
+                "Required": req,
+                "Category": category,
+                "DateLabel": dt.strftime("%d-%m-%Y"),
+            }
         )
-        .properties(height=250)
+
+    return pd.DataFrame(rows)
+
+
+def render_month_calendars(duty_df, valuation_dates, title):
+    st.markdown(f"#### {title}")
+
+    months = sorted({(d.year, d.month) for d in duty_df["Date"]})
+
+    color_scale = alt.Scale(
+        domain=["No Duty", "Low", "Medium", "High", "Valuation Locked"],
+        range=["#ececec", "#2ca02c", "#ff9800", "#d62728", "#7b1fa2"],
     )
 
-    st.altair_chart(chart, use_container_width=True)
+    for year, month in months:
+        frame = build_month_calendar_frame(
+            duty_df, set(valuation_dates), year, month
+        )
+
+        st.markdown(f"**{calmod.month_name[month]} {year}**")
+
+        base = alt.Chart(frame).encode(
+            x=alt.X(
+                "Weekday:N",
+                sort=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                title="",
+            ),
+            y=alt.Y("week(Date):O", title=""),
+            tooltip=[
+                alt.Tooltip("DateLabel:N", title="Date"),
+                alt.Tooltip("Required:Q", title="Demand"),
+                alt.Tooltip("Category:N", title="Category"),
+            ],
+        )
+
+        rect = base.mark_rect(stroke="white").encode(
+            color=alt.Color("Category:N", scale=color_scale)
+        )
+
+        text = base.mark_text(color="black", fontSize=12).encode(text="DayNum:Q")
+
+        st.altair_chart((rect + text).properties(height=250), use_container_width=True)
 
 
 def load_willingness():
     if os.path.exists(WILLINGNESS_FILE):
-        return pd.read_excel(WILLINGNESS_FILE)
-    return pd.DataFrame(columns=["Faculty", "Date", "Session"])
+        df = pd.read_excel(WILLINGNESS_FILE)
+        df["FacultyClean"] = df["Faculty"].apply(clean)
+        return df
+    return pd.DataFrame(columns=["Faculty", "Date", "Session", "FacultyClean"])
 
+
+# ---------------- LOGIN ---------------- #
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    st.title("Faculty Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username == "SASTRA" and password == "SASTRA":
+            st.session_state.logged_in = True
+            st.rerun()
+        else:
+            st.error("Invalid credentials")
+
+    st.stop()
 
 # ---------------- LOAD DATA ---------------- #
-
 faculty_df = load_excel(FACULTY_FILE)
 offline_df = normalize_duty_df(load_excel(OFFLINE_FILE))
 online_df = normalize_duty_df(load_excel(ONLINE_FILE))
 
-faculty_df.columns = faculty_df.columns.str.strip()
-faculty_df.rename(columns={
-    faculty_df.columns[0]: "Name",
-    faculty_df.columns[1]: "Designation"
-}, inplace=True)
+faculty_df.rename(
+    columns={
+        faculty_df.columns[0]: "Name",
+        faculty_df.columns[1]: "Designation",
+    },
+    inplace=True,
+)
 
 faculty_df["Clean"] = faculty_df["Name"].apply(clean)
 
-
 # ---------------- HEADER ---------------- #
-
 if os.path.exists(LOGO_FILE):
     st.image(LOGO_FILE, use_container_width=True)
 
@@ -129,12 +203,10 @@ st.markdown("### School of Mechanical Engineering")
 st.markdown("---")
 st.info("Official Notice: Willingness will be accommodated as much as possible.")
 
-
 # ---------------- FACULTY SELECT ---------------- #
-
 selected_name = st.selectbox(
     "Select Your Name",
-    sorted(faculty_df["Name"].dropna().unique())
+    sorted(faculty_df["Name"].dropna().unique()),
 )
 
 selected_clean = clean(selected_name)
@@ -148,21 +220,17 @@ duty_structure = {
     "AP3": 7,
     "AP2": 7,
     "TA": 9,
-    "RA": 9
+    "RA": 9,
 }
 
 required_count = duty_structure.get(designation, 0)
-
 valuation_dates = valuation_dates_for_faculty(faculty_row)
 valuation_set = set(valuation_dates)
 
 if "selected_slots" not in st.session_state:
     st.session_state.selected_slots = []
 
-
-# ---------------- LAYOUT ---------------- #
-
-left, right = st.columns([1, 1.3])
+left, right = st.columns([1, 1.4])
 
 with left:
     st.subheader("Willingness Selection")
@@ -170,64 +238,13 @@ with left:
     st.write("Options Required:", required_count)
 
     if valuation_dates:
-        st.write("Blocked Valuation Dates:", valuation_dates)
-
-    options_df = offline_df[["Date", "Session"]].drop_duplicates()
-    options_df["DateOnly"] = options_df["Date"].dt.date
-
-    valid_dates = sorted([d for d in options_df["DateOnly"].unique() if d not in valuation_set])
-
-    if valid_dates:
-        chosen_date = st.selectbox(
-            "Choose Date",
-            valid_dates,
-            format_func=lambda d: d.strftime("%d-%m-%Y (%A)")
-        )
-
-        sessions = options_df[options_df["DateOnly"] == chosen_date]["Session"].unique()
-        chosen_session = st.selectbox("Choose Session", sorted(sessions))
-
-        if st.button("Add Slot") and len(st.session_state.selected_slots) < required_count:
-            existing_dates = {x["Date"] for x in st.session_state.selected_slots}
-            if chosen_date not in existing_dates:
-                st.session_state.selected_slots.append({
-                    "Date": chosen_date,
-                    "Session": chosen_session
-                })
-
-    st.write("Selected:", len(st.session_state.selected_slots), "/", required_count)
-
-    if st.session_state.selected_slots:
-        st.dataframe(pd.DataFrame(st.session_state.selected_slots))
-
-    willingness_df = load_willingness()
-    already_submitted = selected_name in willingness_df.get("Faculty", [])
-
-    if already_submitted:
-        st.warning("You have already submitted willingness.")
-
-    if st.button("Submit Willingness",
-                 disabled=already_submitted or len(st.session_state.selected_slots) != required_count):
-
-        rows = [{
-            "Faculty": selected_name,
-            "Date": item["Date"].strftime("%d-%m-%Y"),
-            "Session": item["Session"]
-        } for item in st.session_state.selected_slots]
-
-        out_df = pd.concat([willingness_df, pd.DataFrame(rows)], ignore_index=True)
-        out_df.to_excel(WILLINGNESS_FILE, index=False)
-
-        st.success("Willingness submitted successfully!")
-        st.session_state.selected_slots = []
-
+        st.write("Blocked Dates:", valuation_dates)
 
 with right:
-    render_heatmap(offline_df, valuation_set, "Offline Duty Heat Map")
+    render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
 
     if designation in {"P", "ACP"}:
-        render_heatmap(online_df, valuation_set, "Online Duty Heat Map")
-
+        render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
