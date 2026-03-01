@@ -65,54 +65,52 @@ def valuation_dates_for_faculty(faculty_row):
     return sorted(set(dates))
 
 
-def demand_category(required, min_d, max_d):
-    gap = (max_d - min_d) / 3 if max_d != min_d else 1
-    low_max = round(min_d + gap)
-    mid_max = round(min_d + 2 * gap)
-    if required <= low_max:
-        return "Low"
-    if required <= mid_max:
-        return "Medium"
-    return "High"
+def demand_category(required):
+    if required < 3:
+        return "Low (<3)"
+    if 3 <= required <= 7:
+        return "Medium (3-7)"
+    return "High (>7)"
 
 
 def build_month_calendar_frame(duty_df, valuation_dates, year, month):
-    duty_demand = duty_df.groupby("Date", as_index=False)["Required"].sum()
-    demand_map = {d.date(): int(r) for d, r in zip(duty_demand["Date"], duty_demand["Required"])}
+    session_demand = duty_df.groupby(["Date", "Session"], as_index=False)["Required"].sum()
+    demand_map = {
+        (d.date(), str(sess).upper()): int(req)
+        for d, sess, req in zip(session_demand["Date"], session_demand["Session"], session_demand["Required"])
+    }
 
     month_start = pd.Timestamp(year=year, month=month, day=1)
     month_end = month_start + pd.offsets.MonthEnd(0)
     month_days = pd.date_range(month_start, month_end, freq="D")
-
-    month_demands = [demand_map.get(dt.date(), 0) for dt in month_days]
-    min_d = min(month_demands) if month_demands else 0
-    max_d = max(month_demands) if month_demands else 1
-
     first_weekday = month_start.weekday()  # Mon=0
-    rows = []
     weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    rows = []
     for dt in month_days:
         week_no = ((dt.day + first_weekday - 1) // 7) + 1
-        req = demand_map.get(dt.date(), 0)
+        date_only = dt.date()
+        for session in ["FN", "AN"]:
+            req = demand_map.get((date_only, session), 0)
+            if date_only in valuation_dates:
+                category = "Valuation Locked"
+            elif req == 0:
+                category = "No Duty"
+            else:
+                category = demand_category(req)
 
-        if dt.date() in valuation_dates:
-            category = "Valuation Locked"
-        elif req == 0:
-            category = "No Duty"
-        else:
-            category = demand_category(req, min_d, max_d)
-
-        rows.append(
-            {
-                "Date": dt,
-                "Week": week_no,
-                "Weekday": weekday_labels[dt.weekday()],
-                "DayNum": dt.day,
-                "Required": req,
-                "Category": category,
-                "DateLabel": dt.strftime("%d-%m-%Y"),
-            }
-        )
+            rows.append(
+                {
+                    "Date": dt,
+                    "Week": week_no,
+                    "Weekday": weekday_labels[dt.weekday()],
+                    "DayNum": dt.day,
+                    "Session": session,
+                    "Required": req,
+                    "Category": category,
+                    "DateLabel": dt.strftime("%d-%m-%Y"),
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -121,8 +119,8 @@ def render_month_calendars(duty_df, valuation_dates, title):
     months = sorted({(d.year, d.month) for d in duty_df["Date"]})
 
     color_scale = alt.Scale(
-        domain=["No Duty", "Low", "Medium", "High", "Valuation Locked"],
-        range=["#ececec", "#2ca02c", "#ff9800", "#d62728", "#7b1fa2"],
+        domain=["No Duty", "Low (<3)", "Medium (3-7)", "High (>7)", "Valuation Locked"],
+        range=["#ececec", "#2ca02c", "#f1c40f", "#d62728", "#ff69b4"],
     )
 
     for year, month in months:
@@ -131,19 +129,32 @@ def render_month_calendars(duty_df, valuation_dates, title):
 
         base = alt.Chart(frame).encode(
             x=alt.X("Weekday:N", sort=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], title=""),
+            xOffset=alt.XOffset("Session:N", sort=["FN", "AN"], title=""),
             y=alt.Y("Week:O", sort="ascending", title=""),
             tooltip=[
                 alt.Tooltip("DateLabel:N", title="Date"),
+                alt.Tooltip("Session:N", title="Session"),
                 alt.Tooltip("Required:Q", title="Demand"),
                 alt.Tooltip("Category:N", title="Category"),
             ],
         )
 
         rect = base.mark_rect(stroke="white").encode(
-            color=alt.Color("Category:N", scale=color_scale, legend=alt.Legend(title="Heat Map"))
+            color=alt.Color("Category:N", scale=color_scale, legend=alt.Legend(title="Heat Map Legend"))
         )
-        text = base.mark_text(color="black", fontSize=12).encode(text="DayNum:Q")
-        st.altair_chart((rect + text).properties(height=220), use_container_width=True)
+
+        day_text = (
+            alt.Chart(frame[frame["Session"] == "FN"])
+            .mark_text(color="black", fontSize=11, dy=-6)
+            .encode(
+                x=alt.X("Weekday:N", sort=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
+                y=alt.Y("Week:O", sort="ascending"),
+                text=alt.Text("DayNum:Q"),
+            )
+        )
+
+        st.altair_chart((rect + day_text).properties(height=230), use_container_width=True)
+        st.caption("Each date is split into two halves: left = FN, right = AN.")
 
 
 def load_willingness():
@@ -186,6 +197,7 @@ if not st.session_state.logged_in:
     st.markdown("---")
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
     st.stop()
+
 
 # ---------------- LOAD DATA ---------------- #
 faculty_df = load_excel(FACULTY_FILE)
@@ -257,7 +269,6 @@ with left:
     st.write(f"**Designation:** {designation}")
     st.write(f"**Options Required:** {required_count}")
 
-    # requested: do not start willingness by default, only after user adds
     if not valid_dates:
         st.warning("No selectable offline dates available after valuation blocking.")
     else:
@@ -271,17 +282,9 @@ with left:
         available = set(offline_options[offline_options["DateOnly"] == picked_date]["Session"].dropna().astype(str).str.upper())
         btn1, btn2 = st.columns(2)
         with btn1:
-            add_fn = st.button(
-                "Add FN",
-                use_container_width=True,
-                disabled=("FN" not in available) or (len(st.session_state.selected_slots) >= required_count),
-            )
+            add_fn = st.button("Add FN", use_container_width=True, disabled=("FN" not in available) or (len(st.session_state.selected_slots) >= required_count))
         with btn2:
-            add_an = st.button(
-                "Add AN",
-                use_container_width=True,
-                disabled=("AN" not in available) or (len(st.session_state.selected_slots) >= required_count),
-            )
+            add_an = st.button("Add AN", use_container_width=True, disabled=("AN" not in available) or (len(st.session_state.selected_slots) >= required_count))
 
         def add_slot(session):
             existing_dates = {item["Date"] for item in st.session_state.selected_slots}
@@ -313,11 +316,7 @@ with left:
         selected_df["Date"] = pd.to_datetime(selected_df["Date"]).dt.strftime("%d-%m-%Y")
         st.dataframe(selected_df[["Sl.No", "Date", "Day", "Session"]], use_container_width=True, hide_index=True)
 
-        remove_sl = st.selectbox(
-            "Select Sl.No to remove",
-            options=selected_df["Sl.No"].tolist(),
-            format_func=lambda x: f"{x}",
-        )
+        remove_sl = st.selectbox("Select Sl.No to remove", options=selected_df["Sl.No"].tolist(), format_func=lambda x: f"{x}")
         if st.button("Remove Selected Row", use_container_width=True):
             target_row = selected_df[selected_df["Sl.No"] == remove_sl].iloc[0]
             target_date = pd.to_datetime(target_row["Date"], dayfirst=True).date()
@@ -363,7 +362,7 @@ with left:
 
 with right:
     render_month_calendars(offline_df, valuation_set, "Offline Duty Calendar")
-    if designation in {"P", "ACP"}:
+    if designation_key in {"P", "ACP"}:
         render_month_calendars(online_df, valuation_set, "Online Duty Calendar")
 
 st.markdown("---")
