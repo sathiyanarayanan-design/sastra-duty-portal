@@ -329,7 +329,8 @@ if panel_mode == "Admin View":
     st.stop()
 
 # ---------------- FACULTY SELECT ---------------- #
-selected_name = st.selectbox("Select Your Name", sorted(faculty_df["Name"].dropna().unique()))
+faculty_names = faculty_df["Name"].dropna().drop_duplicates().tolist()
+selected_name = st.selectbox("Select Your Name", faculty_names)
 selected_clean = clean(selected_name)
 faculty_row_df = faculty_df[faculty_df["Clean"] == selected_clean]
 if faculty_row_df.empty:
