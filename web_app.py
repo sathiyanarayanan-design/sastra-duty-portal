@@ -308,6 +308,7 @@ def build_delivery_message(name, willingness_list, valuation_list, invigilation_
 
 
 def send_email_summary(to_email, subject, body):
+    mailto_link = f"mailto:{urllib.parse.quote(to_email)}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
     smtp_host = os.getenv("SMTP_HOST")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
@@ -315,7 +316,7 @@ def send_email_summary(to_email, subject, body):
     smtp_from = os.getenv("SMTP_FROM", smtp_user or "")
 
     if not smtp_host or not smtp_user or not smtp_pass or not smtp_from:
-        return False, "Email service is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM."
+        return False, "Email service is not configured on server. Use the generated mail app link below.", mailto_link
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -328,18 +329,20 @@ def send_email_summary(to_email, subject, body):
             server.starttls()
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
-        return True, "Email sent successfully."
+        return True, "Email sent successfully.", ""
     except Exception as exc:
-        return False, f"Email sending failed: {exc}"
+        return False, f"Email sending failed: {exc}", mailto_link
 
 
 def send_sms_summary(to_phone, body):
+    sms_link = f"sms:{urllib.parse.quote(to_phone)}?body={urllib.parse.quote(body)}"
+    whatsapp_link = f"https://wa.me/{urllib.parse.quote(str(to_phone).replace('+', '').replace(' ', ''))}?text={urllib.parse.quote(body)}"
     sid = os.getenv("TWILIO_ACCOUNT_SID")
     token = os.getenv("TWILIO_AUTH_TOKEN")
     from_no = os.getenv("TWILIO_FROM_NUMBER")
 
     if not sid or not token or not from_no:
-        return False, "SMS service is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER."
+        return False, "SMS service is not configured on server. Use the generated SMS/WhatsApp links below.", sms_link, whatsapp_link
 
     payload = urllib.parse.urlencode({"To": to_phone, "From": from_no, "Body": body}).encode()
     req = urllib.request.Request(
@@ -354,9 +357,9 @@ def send_sms_summary(to_phone, body):
     try:
         with urllib.request.urlopen(req, timeout=20):
             pass
-        return True, "SMS sent successfully."
+        return True, "SMS sent successfully.", "", ""
     except Exception as exc:
-        return False, f"SMS sending failed: {exc}"
+        return False, f"SMS sending failed: {exc}", sms_link, whatsapp_link
 
 
 def render_branding_header(show_logo=True):
@@ -635,11 +638,13 @@ if user_panel_mode == "Allotment":
             if not to_email.strip():
                 st.warning("Please enter an email ID.")
             else:
-                ok, msg = send_email_summary(to_email.strip(), f"Allotment Details - {selected_name_allot}", message_text)
+                ok, msg, mailto_link = send_email_summary(to_email.strip(), f"Allotment Details - {selected_name_allot}", message_text)
                 if ok:
                     st.success(msg)
                 else:
-                    st.error(msg)
+                    st.warning(msg)
+                    st.markdown(f"[Open Email App]({mailto_link})")
+                    st.code(message_text, language="text")
 
     with d2:
         to_phone = st.text_input("Recipient Phone Number", key="allotment_phone", placeholder="e.g., +9198XXXXXXXX")
@@ -647,11 +652,14 @@ if user_panel_mode == "Allotment":
             if not to_phone.strip():
                 st.warning("Please enter a phone number.")
             else:
-                ok, msg = send_sms_summary(to_phone.strip(), message_text)
+                ok, msg, sms_link, whatsapp_link = send_sms_summary(to_phone.strip(), message_text)
                 if ok:
                     st.success(msg)
                 else:
-                    st.error(msg)
+                    st.warning(msg)
+                    st.markdown(f"[Open SMS App]({sms_link})")
+                    st.markdown(f"[Open WhatsApp]({whatsapp_link})")
+                    st.code(message_text, language="text")
 
     st.markdown("---")
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
