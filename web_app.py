@@ -1,5 +1,9 @@
 import os
 import calendar as calmod
+import urllib.parse
+import urllib.request
+import smtplib
+from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -275,6 +279,86 @@ def collect_qp_feedback_dates(faculty_row):
     return sorted(set(qp_dates))
 
 
+def format_with_day(date_text):
+    dt = pd.to_datetime(date_text, dayfirst=True, errors="coerce")
+    if pd.isna(dt):
+        return str(date_text).strip()
+    return f"{dt.strftime('%d-%m-%Y')} ({dt.strftime('%A')})"
+
+
+def build_delivery_message(name, willingness_list, valuation_list, invigilation_list, qp_list, accommodated_pct):
+    lines = [
+        f"Allotment Summary for {name}",
+        "",
+        "1) Willingness Options Given:",
+        *(willingness_list or ["Not available"]),
+        "",
+        "2) Valuation Dates (Full Day):",
+        *(valuation_list or ["Not available"]),
+        "",
+        "3) Invigilation Dates (Final Allotment):",
+        *(invigilation_list or ["Not available"]),
+        "",
+        "4) QP Feedback Dates:",
+        *(qp_list or ["Not available"]),
+        "",
+        f"Willingness Accommodated: {accommodated_pct}",
+    ]
+    return "\n".join(lines)
+
+
+def send_email_summary(to_email, subject, body):
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    smtp_from = os.getenv("SMTP_FROM", smtp_user or "")
+
+    if not smtp_host or not smtp_user or not smtp_pass or not smtp_from:
+        return False, "Email service is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM."
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = smtp_from
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        return True, "Email sent successfully."
+    except Exception as exc:
+        return False, f"Email sending failed: {exc}"
+
+
+def send_sms_summary(to_phone, body):
+    sid = os.getenv("TWILIO_ACCOUNT_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_no = os.getenv("TWILIO_FROM_NUMBER")
+
+    if not sid or not token or not from_no:
+        return False, "SMS service is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER."
+
+    payload = urllib.parse.urlencode({"To": to_phone, "From": from_no, "Body": body}).encode()
+    req = urllib.request.Request(
+        f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
+        data=payload,
+        method="POST",
+    )
+    auth = (f"{sid}:{token}").encode()
+    req.add_header("Authorization", "Basic " + __import__("base64").b64encode(auth).decode())
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+    try:
+        with urllib.request.urlopen(req, timeout=20):
+            pass
+        return True, "SMS sent successfully."
+    except Exception as exc:
+        return False, f"SMS sending failed: {exc}"
+
+
 def render_branding_header(show_logo=True):
     if show_logo and os.path.exists(LOGO_FILE):
         c1, c2, c3 = st.columns([2, 1, 2])
@@ -475,52 +559,100 @@ if user_panel_mode == "Allotment":
     qp_feedback_display = []
     if not faculty_row_df_allot.empty:
         faculty_row_allot = faculty_row_df_allot.iloc[0]
-        valuation_display = [d.strftime("%d-%m-%Y") for d in valuation_dates_for_faculty(faculty_row_allot)]
-        qp_feedback_display = collect_qp_feedback_dates(faculty_row_allot)
+        valuation_display = [f"{format_with_day(d.strftime('%d-%m-%Y'))} - Full Day" for d in valuation_dates_for_faculty(faculty_row_allot)]
+        qp_feedback_display = [format_with_day(d) for d in collect_qp_feedback_dates(faculty_row_allot)]
 
     willingness_df_allot = load_willingness()
     willingness_display = []
+    willingness_pairs = set()
     if not willingness_df_allot.empty:
         willingness_mask = faculty_match_mask(willingness_df_allot, selected_clean_allot)
         willingness_rows = willingness_df_allot[willingness_mask].copy()
         if not willingness_rows.empty and {"Date", "Session"}.issubset(willingness_rows.columns):
-            willingness_display = [
-                f"{str(d).strip()} ({str(s).strip()})"
-                for d, s in zip(willingness_rows["Date"], willingness_rows["Session"])
-            ]
+            for d, sess in zip(willingness_rows["Date"], willingness_rows["Session"]):
+                date_fmt = format_with_day(d)
+                sess_fmt = str(sess).strip().upper()
+                willingness_display.append(f"{date_fmt} - {sess_fmt}")
+                norm_date = pd.to_datetime(d, dayfirst=True, errors="coerce")
+                if pd.notna(norm_date):
+                    willingness_pairs.add((norm_date.date(), sess_fmt))
 
     allotment_df = load_final_allotment()
     invigilation_display = []
+    invigilation_pairs = set()
     if not allotment_df.empty:
         allot_mask = faculty_match_mask(allotment_df, selected_clean_allot)
         allot_rows = allotment_df[allot_mask].copy()
         if not allot_rows.empty:
             if {"Date", "Session"}.issubset(allot_rows.columns):
-                invigilation_display = [
-                    f"{str(d).strip()} ({str(s).strip()})"
-                    for d, s in zip(allot_rows["Date"], allot_rows["Session"])
-                ]
+                for d, sess in zip(allot_rows["Date"], allot_rows["Session"]):
+                    date_fmt = format_with_day(d)
+                    sess_fmt = str(sess).strip().upper()
+                    invigilation_display.append(f"{date_fmt} - {sess_fmt}")
+                    norm_date = pd.to_datetime(d, dayfirst=True, errors="coerce")
+                    if pd.notna(norm_date):
+                        invigilation_pairs.add((norm_date.date(), sess_fmt))
             else:
                 invigilation_display = ["Final allotment record available (date/session columns not found)."]
 
-    allotment_view = pd.DataFrame(
-        {
-            "Category": [
-                "Willingness Options Given",
-                "Valuation Dates",
-                "Invigilation Dates (Final Allotment)",
-                "QP Feedback Dates",
-            ],
-            "Details": [
-                "\n".join(willingness_display) if willingness_display else "Not available",
-                "\n".join(valuation_display) if valuation_display else "Not available",
-                "\n".join(invigilation_display) if invigilation_display else "Not available",
-                "\n".join(qp_feedback_display) if qp_feedback_display else "Not available",
-            ],
-        }
+    accommodated_pct = "Not available"
+    if willingness_pairs:
+        matched = len(willingness_pairs.intersection(invigilation_pairs))
+        accommodated_pct = f"{(matched / len(willingness_pairs)) * 100:.2f}% ({matched}/{len(willingness_pairs)})"
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown('<div class="panel-card"><div class="section-title">1) Willingness Options Given</div></div>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Details": willingness_display or ["Not available"]}), use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="panel-card"><div class="section-title">3) Invigilation Dates (Final Allotment)</div></div>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Details": invigilation_display or ["Not available"]}), use_container_width=True, hide_index=True)
+
+    with c2:
+        st.markdown('<div class="panel-card"><div class="section-title">2) Valuation Dates (Full Day)</div></div>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Details": valuation_display or ["Not available"]}), use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="panel-card"><div class="section-title">4) QP Feedback Dates</div></div>', unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Details": qp_feedback_display or ["Not available"]}), use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="panel-card"><div class="section-title">Willingness Accommodation</div></div>', unsafe_allow_html=True)
+    st.info(f"% of willingness accommodated with final allotment: {accommodated_pct}")
+
+    message_text = build_delivery_message(
+        selected_name_allot,
+        willingness_display,
+        valuation_display,
+        invigilation_display,
+        qp_feedback_display,
+        accommodated_pct,
     )
 
-    st.dataframe(allotment_view, use_container_width=True, hide_index=True)
+    st.markdown('<div class="panel-card"><div class="section-title">Send Full Details</div><p class="secure-sub">Provide email or phone number to receive this allotment summary.</p></div>', unsafe_allow_html=True)
+    d1, d2 = st.columns(2)
+    with d1:
+        to_email = st.text_input("Recipient Email ID", key="allotment_email")
+        if st.button("Send to Email", key="send_allotment_email", use_container_width=True):
+            if not to_email.strip():
+                st.warning("Please enter an email ID.")
+            else:
+                ok, msg = send_email_summary(to_email.strip(), f"Allotment Details - {selected_name_allot}", message_text)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+    with d2:
+        to_phone = st.text_input("Recipient Phone Number", key="allotment_phone", placeholder="e.g., +9198XXXXXXXX")
+        if st.button("Send to Phone", key="send_allotment_phone", use_container_width=True):
+            if not to_phone.strip():
+                st.warning("Please enter a phone number.")
+            else:
+                ok, msg = send_sms_summary(to_phone.strip(), message_text)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
     st.markdown("---")
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
     st.stop()
