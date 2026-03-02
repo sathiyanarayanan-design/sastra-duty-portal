@@ -1,23 +1,3 @@
-"""
-SASTRA SoME – Examination Duty Allocator
-=========================================
-Uses Google OR-Tools CP-SAT solver to produce a fair, constraint-satisfying
-duty allocation from faculty willingness data.
-
-Input files (same folder as script):
-  Faculty_Master.xlsx      – Name | Designation | V1..V5 (valuation dates)
-  Final_Willingness.xlsx   – Faculty | Date | Session
-  Offline_Duty.xlsx        – Date | Session | Required
-  Online_Duty.xlsx         – Date | Session | Required
-
-Output file:
-  Final_Allocation.xlsx    – Faculty | Date | Session | Mode (Offline/Online)
-
-Run:
-  pip install ortools openpyxl pandas
-  python allocate_duty.py
-"""
-
 import os
 import sys
 import pandas as pd
@@ -291,3 +271,4 @@ for _, row in counts.iterrows():
     quota = DUTY_QUOTA.get(row["Designation"], "?")
     match = "✅" if row["Assigned"] == quota else "⚠"
     print(f"  {match} {row['Faculty']:35s} [{row['Designation']}] {row['Assigned']}/{quota}")
+
