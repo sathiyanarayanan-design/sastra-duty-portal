@@ -9,6 +9,7 @@ FACULTY_FILE = "Faculty_Master.xlsx"
 OFFLINE_FILE = "Offline_Duty.xlsx"
 ONLINE_FILE = "Online_Duty.xlsx"
 WILLINGNESS_FILE = "Willingness.xlsx"
+FINAL_ALLOTMENT_FILE = "Final_Allocation.xlsx"
 LOGO_FILE = "sastra_logo.png"
 
 st.set_page_config(page_title="SASTRA Duty Portal", layout="wide")
@@ -240,6 +241,40 @@ def load_willingness():
     return pd.DataFrame(columns=["Faculty", "Date", "Session", "FacultyClean"])
 
 
+def load_final_allotment():
+    if os.path.exists(FINAL_ALLOTMENT_FILE):
+        try:
+            return pd.read_excel(FINAL_ALLOTMENT_FILE)
+        except Exception:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def faculty_match_mask(df, selected_clean):
+    if df.empty:
+        return pd.Series([], dtype=bool)
+    name_cols = [c for c in df.columns if "name" in str(c).strip().lower() or "faculty" in str(c).strip().lower()]
+    if not name_cols:
+        return pd.Series([False] * len(df), index=df.index)
+    mask = pd.Series([False] * len(df), index=df.index)
+    for col in name_cols:
+        mask = mask | (df[col].astype(str).apply(clean) == selected_clean)
+    return mask
+
+
+def collect_qp_feedback_dates(faculty_row):
+    qp_dates = []
+    for col in faculty_row.index:
+        col_text = str(col).strip().upper()
+        if "QP" in col_text and "DATE" in col_text:
+            val = faculty_row[col]
+            if pd.notna(val):
+                dt = pd.to_datetime(val, dayfirst=True, errors="coerce")
+                if pd.notna(dt):
+                    qp_dates.append(dt.strftime("%d-%m-%Y"))
+    return sorted(set(qp_dates))
+
+
 def render_branding_header(show_logo=True):
     if show_logo and os.path.exists(LOGO_FILE):
         c1, c2, c3 = st.columns([2, 1, 2])
@@ -430,7 +465,62 @@ user_panel_mode = st.radio(
 )
 
 if user_panel_mode == "Allotment":
-    st.info("Currently willingness registration is under progress. Allotment will be shown later.")
+    st.markdown("### Allotment Details")
+    faculty_names = faculty_df["Name"].dropna().drop_duplicates().tolist()
+    selected_name_allot = st.selectbox("Select Faculty", faculty_names, key="allotment_faculty")
+    selected_clean_allot = clean(selected_name_allot)
+
+    faculty_row_df_allot = faculty_df[faculty_df["Clean"] == selected_clean_allot]
+    valuation_display = []
+    qp_feedback_display = []
+    if not faculty_row_df_allot.empty:
+        faculty_row_allot = faculty_row_df_allot.iloc[0]
+        valuation_display = [d.strftime("%d-%m-%Y") for d in valuation_dates_for_faculty(faculty_row_allot)]
+        qp_feedback_display = collect_qp_feedback_dates(faculty_row_allot)
+
+    willingness_df_allot = load_willingness()
+    willingness_display = []
+    if not willingness_df_allot.empty:
+        willingness_mask = faculty_match_mask(willingness_df_allot, selected_clean_allot)
+        willingness_rows = willingness_df_allot[willingness_mask].copy()
+        if not willingness_rows.empty and {"Date", "Session"}.issubset(willingness_rows.columns):
+            willingness_display = [
+                f"{str(d).strip()} ({str(s).strip()})"
+                for d, s in zip(willingness_rows["Date"], willingness_rows["Session"])
+            ]
+
+    allotment_df = load_final_allotment()
+    invigilation_display = []
+    if not allotment_df.empty:
+        allot_mask = faculty_match_mask(allotment_df, selected_clean_allot)
+        allot_rows = allotment_df[allot_mask].copy()
+        if not allot_rows.empty:
+            if {"Date", "Session"}.issubset(allot_rows.columns):
+                invigilation_display = [
+                    f"{str(d).strip()} ({str(s).strip()})"
+                    for d, s in zip(allot_rows["Date"], allot_rows["Session"])
+                ]
+            else:
+                invigilation_display = ["Final allotment record available (date/session columns not found)."]
+
+    allotment_view = pd.DataFrame(
+        {
+            "Category": [
+                "Willingness Options Given",
+                "Valuation Dates",
+                "Invigilation Dates (Final Allotment)",
+                "QP Feedback Dates",
+            ],
+            "Details": [
+                "\n".join(willingness_display) if willingness_display else "Not available",
+                "\n".join(valuation_display) if valuation_display else "Not available",
+                "\n".join(invigilation_display) if invigilation_display else "Not available",
+                "\n".join(qp_feedback_display) if qp_feedback_display else "Not available",
+            ],
+        }
+    )
+
+    st.dataframe(allotment_view, use_container_width=True, hide_index=True)
     st.markdown("---")
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
     st.stop()
