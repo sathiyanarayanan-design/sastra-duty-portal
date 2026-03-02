@@ -110,10 +110,27 @@ def load_willingness():
     return pd.DataFrame(columns=["Faculty","Date","Session","FacultyClean"])
 
 def load_final_allotment():
-    if os.path.exists(FINAL_ALLOTMENT_FILE):
-        try: return pd.read_excel(FINAL_ALLOTMENT_FILE)
-        except: return pd.DataFrame()
-    return pd.DataFrame()
+    if not os.path.exists(FINAL_ALLOTMENT_FILE):
+        return pd.DataFrame()
+    try:
+        df = pd.read_excel(FINAL_ALLOTMENT_FILE)
+        df.columns = df.columns.str.strip()
+        # Robustly normalise Date: may be string dd-mm-yyyy or Excel date serial/Timestamp
+        if "Date" in df.columns:
+            def _parse_allot_date(v):
+                if isinstance(v, (pd.Timestamp,)) and pd.notna(v):
+                    return v
+                s = str(v).strip()
+                try:
+                    return pd.to_datetime(s, format="%d-%m-%Y")
+                except Exception:
+                    return pd.to_datetime(s, dayfirst=True, errors="coerce")
+            df["Date"] = df["Date"].apply(_parse_allot_date)
+        if "Session" in df.columns:
+            df["Session"] = df["Session"].apply(normalize_session)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
 
 def faculty_match_mask(df, selected_clean):
     if df.empty: return pd.Series([], dtype=bool)
@@ -136,8 +153,20 @@ def collect_qp_feedback_dates(faculty_row):
     return sorted(set(qp_dates))
 
 def format_with_day(date_text):
-    dt = pd.to_datetime(date_text, dayfirst=True, errors="coerce")
-    if pd.isna(dt): return str(date_text).strip()
+    if pd.isna(date_text) if not isinstance(date_text, str) else False:
+        return str(date_text).strip()
+    # If already a datetime/Timestamp, use directly
+    if isinstance(date_text, (pd.Timestamp, date)):
+        dt = pd.Timestamp(date_text)
+    else:
+        s = str(date_text).strip()
+        # Try dd-mm-yyyy first, then let pandas guess
+        try:
+            dt = pd.to_datetime(s, format="%d-%m-%Y")
+        except Exception:
+            dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
+    if pd.isna(dt):
+        return str(date_text).strip()
     return f"{dt.strftime('%d-%m-%Y')} ({dt.strftime('%A')})"
 
 def build_delivery_message(name, willingness_list, valuation_list, invigilation_list, qp_list, accommodated_pct):
@@ -435,7 +464,8 @@ def run_or_tools_allocation(faculty_df, will_df, offline_df, online_df, time_lim
             records.append({
                 "Faculty":      fac["name"],
                 "Designation":  fac["des"],
-                "Date":         d.strftime("%d-%m-%Y"),
+                "Date":         pd.Timestamp(d),   # keep as date for clean Excel read-back
+                "DateStr":      d.strftime("%d-%m-%Y"),
                 "Session":      sess,
                 "Mode":         mode,
                 "Allot_Reason": reason,
@@ -525,7 +555,11 @@ def render_allocation_admin(faculty_df, will_df, offline_df, online_df):
             return
 
         # ── save ──────────────────────────────────────────────────
-        result_df.to_excel(FINAL_ALLOTMENT_FILE, index=False)
+        # Save with clean date column (Timestamp → Excel date)
+        save_df = result_df.copy()
+        if "DateStr" in save_df.columns:
+            save_df = save_df.drop(columns=["DateStr"])
+        save_df.to_excel(FINAL_ALLOTMENT_FILE, index=False)
         if unf_df is not None and not unf_df.empty:
             unf_df.to_excel("Unfilled_Slots.xlsx", index=False)
 
@@ -569,7 +603,7 @@ def render_allocation_admin(faculty_df, will_df, offline_df, online_df):
 
         # ── full table with reason ────────────────────────────────
         st.markdown("### 📄 Full Allocation Table")
-        view = result_df.copy().reset_index(drop=True)
+        view = result_df.drop(columns=["DateStr"], errors="ignore").copy().reset_index(drop=True)
         view.insert(0, "Sl.No", view.index+1)
         # colour-code reason column
         def colour_reason(val):
@@ -763,12 +797,25 @@ if user_panel_mode == "Allotment":
             if {"Date","Session"}.issubset(arows.columns):
                 for d,sess in zip(arows["Date"], arows["Session"]):
                     date_fmt = format_with_day(d)
-                    sess_fmt = str(sess).strip().upper()
+                    sess_fmt = normalize_session(sess)
                     invigilation_display.append(f"{date_fmt} - {sess_fmt}")
-                    nd = pd.to_datetime(d, dayfirst=True, errors="coerce")
-                    if pd.notna(nd): invigilation_pairs.add((nd.date(), sess_fmt))
+                    # build pair for willingness-match calculation
+                    if isinstance(d, pd.Timestamp) and pd.notna(d):
+                        invigilation_pairs.add((d.date(), sess_fmt))
+                    else:
+                        nd = pd.to_datetime(str(d).strip(), dayfirst=True, errors="coerce")
+                        if pd.notna(nd): invigilation_pairs.add((nd.date(), sess_fmt))
             else:
                 invigilation_display = ["Final allotment available (date/session columns not found)."]
+    # ── diagnostic expander (visible to all users, helps catch issues) ──
+    with st.expander("🔍 Debug: Allotment file info", expanded=False):
+        st.caption(f"File exists: {os.path.exists(FINAL_ALLOTMENT_FILE)}")
+        if not allotment_df.empty:
+            st.caption(f"Rows in file: {len(allotment_df)}  |  Columns: {list(allotment_df.columns)}")
+            st.caption(f"Rows matched for selected faculty: {len(allotment_df[faculty_match_mask(allotment_df, selected_clean_allot)])}")
+            st.dataframe(allotment_df.head(5), use_container_width=True)
+        else:
+            st.caption("Final_Allocation.xlsx not found or empty.")
 
     accommodated_pct = "Not available"
     if willingness_pairs:
