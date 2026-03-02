@@ -2,8 +2,6 @@ import os
 import calendar as calmod
 import urllib.parse
 import urllib.request
-import smtplib
-from email.message import EmailMessage
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -307,59 +305,11 @@ def build_delivery_message(name, willingness_list, valuation_list, invigilation_
     return "\n".join(lines)
 
 
-def send_email_summary(to_email, subject, body):
-    mailto_link = f"mailto:{urllib.parse.quote(to_email)}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASS")
-    smtp_from = os.getenv("SMTP_FROM", smtp_user or "")
-
-    if not smtp_host or not smtp_user or not smtp_pass or not smtp_from:
-        return False, "Email service is not configured on server. Use the generated mail app link below.", mailto_link
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = smtp_from
-    msg["To"] = to_email
-    msg.set_content(body)
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-        return True, "Email sent successfully.", ""
-    except Exception as exc:
-        return False, f"Email sending failed: {exc}", mailto_link
-
-
-def send_sms_summary(to_phone, body):
-    sms_link = f"sms:{urllib.parse.quote(to_phone)}?body={urllib.parse.quote(body)}"
-    whatsapp_link = f"https://wa.me/{urllib.parse.quote(str(to_phone).replace('+', '').replace(' ', ''))}?text={urllib.parse.quote(body)}"
-    sid = os.getenv("TWILIO_ACCOUNT_SID")
-    token = os.getenv("TWILIO_AUTH_TOKEN")
-    from_no = os.getenv("TWILIO_FROM_NUMBER")
-
-    if not sid or not token or not from_no:
-        return False, "SMS service is not configured on server. Use the generated SMS/WhatsApp links below.", sms_link, whatsapp_link
-
-    payload = urllib.parse.urlencode({"To": to_phone, "From": from_no, "Body": body}).encode()
-    req = urllib.request.Request(
-        f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
-        data=payload,
-        method="POST",
-    )
-    auth = (f"{sid}:{token}").encode()
-    req.add_header("Authorization", "Basic " + __import__("base64").b64encode(auth).decode())
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
-
-    try:
-        with urllib.request.urlopen(req, timeout=20):
-            pass
-        return True, "SMS sent successfully.", "", ""
-    except Exception as exc:
-        return False, f"SMS sending failed: {exc}", sms_link, whatsapp_link
+def get_whatsapp_link(phone, message):
+    """Generate a WhatsApp click-to-chat link."""
+    clean_phone = str(phone).strip().replace("+", "").replace(" ", "").replace("-", "")
+    encoded_msg = urllib.parse.quote(message)
+    return f"https://wa.me/{clean_phone}?text={encoded_msg}"
 
 
 def render_branding_header(show_logo=True):
@@ -630,36 +580,36 @@ if user_panel_mode == "Allotment":
         accommodated_pct,
     )
 
-    st.markdown('<div class="panel-card"><div class="section-title">Send Full Details</div><p class="secure-sub">Provide email or phone number to receive this allotment summary.</p></div>', unsafe_allow_html=True)
-    d1, d2 = st.columns(2)
-    with d1:
-        to_email = st.text_input("Recipient Email ID", key="allotment_email")
-        if st.button("Send to Email", key="send_allotment_email", use_container_width=True):
-            if not to_email.strip():
-                st.warning("Please enter an email ID.")
-            else:
-                ok, msg, mailto_link = send_email_summary(to_email.strip(), f"Allotment Details - {selected_name_allot}", message_text)
-                if ok:
-                    st.success(msg)
-                else:
-                    st.warning(msg)
-                    st.markdown(f"[Open Email App]({mailto_link})")
-                    st.code(message_text, language="text")
+    # ---------------- WHATSAPP ONLY SHARE SECTION ---------------- #
+    st.markdown('<div class="panel-card"><div class="section-title">📲 Share via WhatsApp</div><p class="secure-sub">Enter the recipient\'s WhatsApp number to share the allotment summary.</p></div>', unsafe_allow_html=True)
 
-    with d2:
-        to_phone = st.text_input("Recipient Phone Number", key="allotment_phone", placeholder="e.g., +9198XXXXXXXX")
-        if st.button("Send to Phone", key="send_allotment_phone", use_container_width=True):
-            if not to_phone.strip():
-                st.warning("Please enter a phone number.")
-            else:
-                ok, msg, sms_link, whatsapp_link = send_sms_summary(to_phone.strip(), message_text)
-                if ok:
-                    st.success(msg)
-                else:
-                    st.warning(msg)
-                    st.markdown(f"[Open SMS App]({sms_link})")
-                    st.markdown(f"[Open WhatsApp]({whatsapp_link})")
-                    st.code(message_text, language="text")
+    wa_phone = st.text_input(
+        "WhatsApp Number (with country code)",
+        placeholder="e.g., +919876543210",
+        key="whatsapp_phone",
+    )
+
+    if st.button("Generate WhatsApp Link", key="generate_wa_link", use_container_width=True):
+        if not wa_phone.strip():
+            st.warning("Please enter a WhatsApp number.")
+        else:
+            wa_link = get_whatsapp_link(wa_phone.strip(), message_text)
+            st.success("WhatsApp link generated! Click the button below to open WhatsApp and send the message.")
+            st.markdown(
+                f"""
+                <a href="{wa_link}" target="_blank"
+                   style="display:inline-block; background-color:#25D366; color:white;
+                          padding:10px 22px; border-radius:10px; font-weight:700;
+                          text-decoration:none; font-size:1rem;">
+                    📲 Open WhatsApp & Send
+                </a>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.caption("Clicking the button will open WhatsApp (web or app) with the message pre-filled.")
+
+    with st.expander("Preview Message"):
+        st.code(message_text, language="text")
 
     st.markdown("---")
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
