@@ -13,6 +13,33 @@ LOGO_FILE = "sastra_logo.png"
 
 st.set_page_config(page_title="SASTRA Duty Portal", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    .secure-card {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid #dbe3ef;
+        border-radius: 12px;
+        padding: 14px 16px;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+        margin-bottom: 10px;
+    }
+    .secure-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #0f172a;
+        margin-bottom: 0.2rem;
+    }
+    .secure-sub {
+        font-size: 0.92rem;
+        color: #334155;
+        margin-bottom: 0;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ---------------- FUNCTIONS ---------------- #
 def clean(x):
@@ -207,10 +234,18 @@ if not st.session_state.logged_in:
     render_branding_header(show_logo=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.subheader("Faculty Login")
+        st.markdown(
+            """
+            <div class="secure-card">
+                <div class="secure-title">🔒 Faculty Login</div>
+                <p class="secure-sub">Enter your authorized credentials to access the duty portal.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
-        if st.button("Login"):
+        if st.button("Sign In", use_container_width=True):
             if username == "SASTRA" and password == "SASTRA":
                 st.session_state.logged_in = True
                 st.rerun()
@@ -292,10 +327,18 @@ panel_mode = st.radio(
 )
 
 if panel_mode == "Admin View":
-    st.markdown("### Admin View (Password Protected)")
+    st.markdown(
+        """
+        <div class="secure-card">
+            <div class="secure-title">🔒 Admin View (Secure Access)</div>
+            <p class="secure-sub">Administrative functions are protected. Please authenticate to continue.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if not st.session_state.admin_authenticated:
         admin_pass = st.text_input("Admin Password", type="password", key="admin_password")
-        if st.button("Unlock Admin View", key="unlock_admin"):
+        if st.button("Unlock Admin View", key="unlock_admin", use_container_width=True):
             if admin_pass == "sathya":
                 st.session_state.admin_authenticated = True
                 st.success("Admin access granted.")
@@ -335,7 +378,7 @@ if panel_mode == "Admin View":
             else:
                 st.error("Please confirm deletion before proceeding.")
 
-        if st.button("Lock Admin View", key="lock_admin"):
+        if st.button("Lock Admin View", key="lock_admin", use_container_width=True):
             st.session_state.admin_authenticated = False
             st.success("Admin view locked.")
             st.rerun()
