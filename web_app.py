@@ -286,21 +286,20 @@ def format_with_day(date_text):
 
 def build_delivery_message(name, willingness_list, valuation_list, invigilation_list, qp_list, accommodated_pct):
     lines = [
-        f"Allotment Summary for {name}",
+        f"Dear {name},",
         "",
-        "1) Willingness Options Given:",
-        *(willingness_list or ["Not available"]),
+        "Here are your Examination Duty Details:",
+        "",
+        "1) Invigilation Dates (Final Allotment):",
+        *(invigilation_list or ["Not allotted yet"]),
         "",
         "2) Valuation Dates (Full Day):",
         *(valuation_list or ["Not available"]),
         "",
-        "3) Invigilation Dates (Final Allotment):",
-        *(invigilation_list or ["Not available"]),
-        "",
-        "4) QP Feedback Dates:",
+        "3) QP Feedback Dates:",
         *(qp_list or ["Not available"]),
         "",
-        f"Willingness Accommodated: {accommodated_pct}",
+        "- SASTRA SoME Examination Committee",
     ]
     return "\n".join(lines)
 
