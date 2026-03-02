@@ -16,29 +16,64 @@ st.set_page_config(page_title="SASTRA Duty Portal", layout="wide")
 st.markdown(
     """
     <style>
+    .stApp {
+        background: #f4f7fb;
+    }
+    .main .block-container {
+        max-width: 1180px;
+        padding-top: 1.2rem;
+        padding-bottom: 1.2rem;
+    }
     .secure-card {
         background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
         border: 1px solid #dbe3ef;
-        border-radius: 12px;
+        border-radius: 14px;
+        padding: 16px 18px;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+        margin-bottom: 12px;
+    }
+    .panel-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
         padding: 14px 16px;
-        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
         margin-bottom: 10px;
     }
     .secure-title {
-        font-size: 1.05rem;
+        font-size: 1.08rem;
         font-weight: 700;
         color: #0f172a;
         margin-bottom: 0.2rem;
     }
     .secure-sub {
-        font-size: 0.92rem;
+        font-size: 0.93rem;
         color: #334155;
         margin-bottom: 0;
+    }
+    .section-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #0b3a67;
+        margin-bottom: 0.35rem;
+    }
+    .stButton>button {
+        border-radius: 10px;
+        border: 1px solid #cbd5e1;
+        font-weight: 600;
+    }
+    .stDownloadButton>button {
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    [data-testid="stRadio"] label p {
+        font-weight: 600;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 
 # ---------------- FUNCTIONS ---------------- #
@@ -283,9 +318,9 @@ st.markdown(
         color: #800000;
         padding: 10px 12px;
         border: 2px solid #800000;
-        background: #fff6f6;
+        background: #fffaf5;
         border-radius: 6px;
-        animation: blinkPulse 1.2s infinite;
+        animation: blinkPulse 2.4s ease-in-out infinite;
     }
     @keyframes blinkPulse {
         0% { opacity: 1; }
@@ -317,8 +352,7 @@ if "user_panel_mode" not in st.session_state:
     st.session_state.user_panel_mode = "Willingness"
 
 # Control panel at top as requested
-st.subheader("Control Panel")
-st.caption("Menu: choose Admin View or User View. Under User View, choose Willingness or Allotment.")
+st.markdown('<div class="panel-card"><div class="section-title">Control Panel</div><p class="secure-sub">Menu: choose Admin View or User View. Under User View, choose Willingness or Allotment.</p></div>', unsafe_allow_html=True)
 panel_mode = st.radio(
     "Main Menu",
     ["Admin View", "User View"],
@@ -387,6 +421,7 @@ if panel_mode == "Admin View":
     st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
     st.stop()
 
+st.markdown('<div class="panel-card"><div class="section-title">User View Menu</div><p class="secure-sub">Choose the required user function.</p></div>', unsafe_allow_html=True)
 user_panel_mode = st.radio(
     "User View Menu",
     ["Willingness", "Allotment"],
