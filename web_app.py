@@ -440,29 +440,15 @@ def run_optimizer(log_box):
             log(f"    • {n}  [{fac_desig.get(n,'?')}]")
 
     # ── Parse Exam Slots from Offline_Duty.xlsx and Online_Duty.xlsx ── #
-    def load_duty_file(filepath, duty_type, log):
-        """Read a duty file and return list of slot dicts."""
-        if not os.path.exists(filepath):
-            log(f"  ⚠ File not found: {filepath} — skipping {duty_type} slots")
-            return []
-        try:
-            raw = pd.read_excel(filepath, header=None)
-        except Exception as e:
-            log(f"  ⚠ Could not read {filepath}: {e}")
-            return []
-        log(f"  {duty_type} file: {filepath}  ({raw.shape[0]} rows × {raw.shape[1]} cols)")
-        # Detect header row: skip row 0 if it is not a date
-        try:
-            pd.to_datetime(raw.iloc[0, 0])
-            start = 0
-        except Exception:
-            start = 1
-        return parse_ig_section(raw, start, len(raw), duty_type)
-
     log("")
     log("  Loading exam slots...")
-    slots_offline = load_duty_file(OFFLINE_FILE, "Offline", log)
-    slots_online  = load_duty_file(ONLINE_FILE,  "Online",  log)
+    for fpath, dtype in [(OFFLINE_FILE,"Offline"),(ONLINE_FILE,"Online")]:
+        if not os.path.exists(fpath):
+            log(f"  ⚠ File not found: {fpath} — {dtype} slots will be empty")
+        else:
+            log(f"  ✓ Found: {fpath}")
+    slots_offline = _parse_duty_file(OFFLINE_FILE, "Offline")
+    slots_online  = _parse_duty_file(ONLINE_FILE,  "Online")
     ALL_SLOTS     = slots_offline + slots_online
     N_SLOTS       = len(ALL_SLOTS)
 
@@ -803,40 +789,44 @@ def run_optimizer(log_box):
 #                LOAD IG SLOTS FOR CALENDAR (cached)             #
 # ═══════════════════════════════════════════════════════════════ #
 
-@st.cache_data
-def load_ig_slots():
-    """
-    Load exam slots from Offline_Duty.xlsx and Online_Duty.xlsx for the calendar display.
-    """
-    empty = pd.DataFrame(columns=["Date","Session","Required"])
-
-    def to_df(slots):
-        if not slots:
-            df = empty.copy()
-            df["Date"] = pd.to_datetime(df["Date"])
-            return df
-        df = pd.DataFrame(slots)
-        df["Date"]     = pd.to_datetime(df["date"], errors="coerce")
-        df["Session"]  = df["session"].astype(str).str.strip().str.upper()
-        df["Required"] = pd.to_numeric(df["required"], errors="coerce").fillna(1).astype(int)
-        return df[["Date","Session","Required"]]
-
-    def read_file(filepath, duty_type):
-        if not os.path.exists(filepath):
-            return []
+def _parse_duty_file(filepath, duty_type):
+    """Read a duty xlsx file and return list of slot dicts."""
+    if not os.path.exists(filepath):
+        return []
+    try:
+        raw = pd.read_excel(filepath, header=None)
         try:
-            raw = pd.read_excel(filepath, header=None)
-            try:
-                pd.to_datetime(raw.iloc[0, 0])
-                start = 0
-            except Exception:
-                start = 1
-            return parse_ig_section(raw, start, len(raw), duty_type)
+            pd.to_datetime(raw.iloc[0, 0])
+            start = 0
         except Exception:
-            return []
+            start = 1
+        return parse_ig_section(raw, start, len(raw), duty_type)
+    except Exception:
+        return []
 
-    return (to_df(read_file(OFFLINE_FILE, "Offline")),
-            to_df(read_file(ONLINE_FILE,  "Online")))
+
+def _slots_to_df(slots):
+    """Convert slot list to a clean DataFrame."""
+    empty = pd.DataFrame(columns=["Date","Session","Required"])
+    if not slots:
+        df = empty.copy()
+        df["Date"] = pd.to_datetime(df["Date"])
+        return df
+    df = pd.DataFrame(slots)
+    df["Date"]     = pd.to_datetime(df["date"], errors="coerce")
+    df["Session"]  = df["session"].astype(str).str.strip().str.upper()
+    df["Required"] = pd.to_numeric(df["required"], errors="coerce").fillna(1).astype(int)
+    return df[["Date","Session","Required"]]
+
+
+@st.cache_data
+def load_ig_slots(offline_path, online_path):
+    """
+    Load exam slots from Offline_Duty.xlsx and Online_Duty.xlsx for the calendar.
+    Paths passed explicitly so st.cache_data keys on them correctly.
+    """
+    return (_slots_to_df(_parse_duty_file(offline_path, "Offline")),
+            _slots_to_df(_parse_duty_file(online_path,  "Online")))
 
 
 # ═══════════════════════════════════════════════════════════════ #
