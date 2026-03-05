@@ -502,6 +502,7 @@ if panel_mode == "Admin View":
             st.info("No willingness submissions yet.")
         else:
             view_df = willingness_admin.copy().reset_index(drop=True)
+            view_df = view_df.drop(columns=["Sl.No"], errors="ignore")
             view_df.insert(0, "Sl.No", view_df.index + 1)
             st.dataframe(view_df, use_container_width=True, hide_index=True)
             csv_data = view_df.to_csv(index=False).encode("utf-8")
@@ -570,6 +571,7 @@ if user_panel_mode == "Allotment":
         st.stop()
 
     st.markdown("### Allotment Details")
+    st.caption("Final allotment shown here is sourced from Google OR-Tools allocation output (`Final_Allocation.xlsx`).")
     faculty_names = faculty_df["Name"].dropna().drop_duplicates().tolist()
     selected_name_allot = st.selectbox("Select Faculty", faculty_names, key="allotment_faculty")
     selected_clean_allot = clean(selected_name_allot)
