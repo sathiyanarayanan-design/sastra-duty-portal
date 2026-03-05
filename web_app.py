@@ -7,15 +7,16 @@ Single Streamlit file combining:
   3. Run MILP optimizer (HiGHS via scipy) directly from UI
   4. Allotment view per faculty + WhatsApp share
 
-Required files alongside app.py:
+Required files in GitHub repo:
   Faculty_Master.xlsx   — columns: Name, Designation  (+ optional V1..V5, QP_DATE cols)
-  IG_Willingness.xlsx   — exam schedule (offline rows first, then Online section header)
+  Offline_Duty.xlsx     — offline exam slots (Date | FN/AN | Required)
+  Online_Duty.xlsx      — online exam slots  (Date | FN/AN | Required)
+  Willingness.xlsx      — collected faculty willingness (upload after collection)
   sastra_logo.png       — (optional) branding logo
 
-Auto-generated files:
-  Willingness.xlsx      — grows as faculty submit
-  Final_Allocation.xlsx — optimizer output
-  Allocation_Report.xlsx — detailed sheets
+Optimizer outputs (downloaded from admin panel):
+  Final_Allocation.xlsx
+  Allocation_Report.xlsx
 
 Login credentials:
   Faculty portal  : SASTRA / SASTRA
@@ -29,7 +30,7 @@ from collections import defaultdict
 import streamlit as st
 import altair as alt
 
-# scipy is only needed when running the optimizer — imported lazily there
+# scipy is only needed when running the optimizer
 try:
     from scipy.optimize import milp, LinearConstraint, Bounds
     from scipy.sparse import csc_matrix
@@ -40,12 +41,14 @@ except ImportError:
 warnings.filterwarnings("ignore")
 
 # ─── File Paths ──────────────────────────────────────────────── #
-FACULTY_FILE      = "Faculty_Master.xlsx"
-IG_FILE           = "IG_Willingness.xlsx"
-WILLINGNESS_FILE  = "Willingness.xlsx"
+# Both files must be committed to your GitHub repo.
+FACULTY_FILE      = "Faculty_Master.xlsx"   # faculty list with designations
+IG_FILE           = "IG_Willingness.xlsx"    # exam schedule (offline + online slots)
+WILLINGNESS_FILE  = "IG_Willingness.xlsx"    # collected faculty willingness submissions
 FINAL_ALLOC_FILE  = "Final_Allocation.xlsx"
 ALLOC_REPORT_FILE = "Allocation_Report.xlsx"
 LOGO_FILE         = "sastra_logo.png"
+
 
 # ─── Designation Rules (optimizer) ───────────────────────────── #
 DESIG_RULES = {
@@ -132,13 +135,90 @@ def normalize_duty_df(df):
     return df
 
 def load_willingness():
-    if os.path.exists(WILLINGNESS_FILE):
-        df = pd.read_excel(WILLINGNESS_FILE)
-        if "Faculty" not in df.columns:
-            df["Faculty"] = ""
-        df["FacultyClean"] = df["Faculty"].apply(clean)
-        return df
-    return pd.DataFrame(columns=["Faculty","Date","Session","FacultyClean"])
+    """
+    Load submitted willingness from Willingness.xlsx.
+    This file is committed to GitHub by the admin after collection.
+    Scans all sheets and picks the one with Faculty/Date/Session columns.
+    """
+    if not os.path.exists(WILLINGNESS_FILE):
+        return pd.DataFrame(columns=["Faculty","Date","Session","FacultyClean"])
+    try:
+        xl = pd.ExcelFile(WILLINGNESS_FILE)
+        df = None
+        # Try each sheet, pick first one with the right columns
+        for sh in xl.sheet_names:
+            candidate = xl.parse(sh)
+            candidate.columns = candidate.columns.str.strip()
+            if {"Faculty","Date","Session"}.issubset(set(candidate.columns)):
+                df = candidate[["Faculty","Date","Session"]].copy()
+                break
+        # Fallback: just read first sheet and rename cols 0,1,2
+        if df is None:
+            df = xl.parse(xl.sheet_names[0])
+            df.columns = df.columns.str.strip()
+            if len(df.columns) >= 3:
+                df = df.rename(columns={
+                    df.columns[0]: "Faculty",
+                    df.columns[1]: "Date",
+                    df.columns[2]: "Session",
+                })[["Faculty","Date","Session"]].copy()
+            else:
+                df = pd.DataFrame(columns=["Faculty","Date","Session"])
+    except Exception:
+        df = pd.DataFrame(columns=["Faculty","Date","Session"])
+
+    for col in ["Faculty","Date","Session"]:
+        if col not in df.columns:
+            df[col] = ""
+    df["FacultyClean"] = df["Faculty"].apply(clean)
+    return df
+
+
+def save_willingness(faculty_name, slots):
+    """
+    Append new willingness rows to session state only.
+    The admin downloads the CSV and uploads back to GitHub.
+    """
+    new_rows = pd.DataFrame([
+        {"Faculty": faculty_name,
+         "Date": item["Date"].strftime("%d-%m-%Y"),
+         "Session": item["Session"]}
+        for item in slots
+    ])
+    if "pending_submissions" not in st.session_state:
+        st.session_state.pending_submissions = pd.DataFrame(
+            columns=["Faculty","Date","Session"])
+    st.session_state.pending_submissions = pd.concat(
+        [st.session_state.pending_submissions, new_rows], ignore_index=True)
+    return True
+
+
+def delete_all_willingness():
+    """Reset pending submissions in session state."""
+    st.session_state.pending_submissions = pd.DataFrame(
+        columns=["Faculty","Date","Session"])
+    return True
+
+
+def get_all_willingness_for_display():
+    """
+    Combine committed Willingness.xlsx data + any new in-session submissions.
+    Used in admin view.
+    """
+    committed = load_willingness().drop(columns=["FacultyClean"], errors="ignore")
+    pending   = st.session_state.get("pending_submissions",
+                                     pd.DataFrame(columns=["Faculty","Date","Session"]))
+    combined  = pd.concat([committed, pending], ignore_index=True)
+    combined  = combined.drop_duplicates(subset=["Faculty","Date","Session"])
+    return combined
+
+
+def get_all_willingness_for_optimizer():
+    """
+    Returns combined willingness DataFrame for the optimizer.
+    Committed file is the source of truth; session additions are appended.
+    """
+    return get_all_willingness_for_display()
 
 def load_final_allotment():
     if os.path.exists(FINAL_ALLOC_FILE):
@@ -285,7 +365,7 @@ def render_branding_header(show_logo=True):
 # ═══════════════════════════════════════════════════════════════ #
 
 def parse_ig_section(raw_df, start, end, duty_type):
-    """Parse exam slots from IG_Willingness.xlsx section."""
+    """Parse exam slots from a duty file (Offline_Duty.xlsx or Online_Duty.xlsx)."""
     slots = []
     for i in range(start, end):
         row = raw_df.iloc[i]
@@ -303,7 +383,10 @@ def parse_ig_section(raw_df, start, end, duty_type):
 def run_optimizer(log_box):
     """
     Runs HiGHS MILP optimizer.
-    Reads: Faculty_Master.xlsx, Willingness.xlsx, IG_Willingness.xlsx
+    Reads: Faculty_Master.xlsx  — faculty list
+           Offline_Duty.xlsx   — offline exam slots
+           Online_Duty.xlsx    — online exam slots
+           Willingness.xlsx    — faculty willingness submissions (optional; if absent all faculty auto-assigned)
     Writes: Final_Allocation.xlsx, Allocation_Report.xlsx
     Returns: (alloc_df, summary_df, slot_df, desig_df)
     """
@@ -336,14 +419,16 @@ def run_optimizer(log_box):
     for name, d in fac_desig.items():
         desig_groups[d].append(name)
 
-    # ── Load Willingness ── #
-    will_df = load_willingness()
+    # ── Load Willingness (committed file + any in-session pending rows) ── #
+    will_df = get_all_willingness_for_optimizer()
+    will_df = will_df.drop(columns=["FacultyClean"], errors="ignore")
     if "Date" in will_df.columns:
-        will_df["Date"] = pd.to_datetime(will_df["Date"], dayfirst=True, errors="coerce")
+        will_df["Date"]    = pd.to_datetime(will_df["Date"], dayfirst=True, errors="coerce")
         will_df["Session"] = will_df["Session"].astype(str).str.strip().str.upper()
-        will_df = will_df.dropna(subset=["Date"])
+        will_df            = will_df.dropna(subset=["Date"])
 
-    submitted_faculty = set(will_df["Faculty"].str.strip().unique()) if ("Faculty" in will_df.columns and not will_df.empty) else set()
+    submitted_faculty = (set(will_df["Faculty"].str.strip().unique())
+                         if "Faculty" in will_df.columns and not will_df.empty else set())
     non_submitted     = [n for n in ALL_FACULTY if n not in submitted_faculty]
 
     log(f"\n  Faculty total    : {N_FAC}")
@@ -354,24 +439,40 @@ def run_optimizer(log_box):
         for n in non_submitted:
             log(f"    • {n}  [{fac_desig.get(n,'?')}]")
 
-    # ── Parse Exam Slots ── #
-    raw = pd.read_excel(IG_FILE, header=None)
-    online_header_row = None
-    for i in range(len(raw)):
-        cell = str(raw.iloc[i, 0])
-        if "GCR Online" in cell or "online exams" in cell.lower():
-            online_header_row = i
-            break
+    # ── Parse Exam Slots from Offline_Duty.xlsx and Online_Duty.xlsx ── #
+    def load_duty_file(filepath, duty_type, log):
+        """Read a duty file and return list of slot dicts."""
+        if not os.path.exists(filepath):
+            log(f"  ⚠ File not found: {filepath} — skipping {duty_type} slots")
+            return []
+        try:
+            raw = pd.read_excel(filepath, header=None)
+        except Exception as e:
+            log(f"  ⚠ Could not read {filepath}: {e}")
+            return []
+        log(f"  {duty_type} file: {filepath}  ({raw.shape[0]} rows × {raw.shape[1]} cols)")
+        # Detect header row: skip row 0 if it is not a date
+        try:
+            pd.to_datetime(raw.iloc[0, 0])
+            start = 0
+        except Exception:
+            start = 1
+        return parse_ig_section(raw, start, len(raw), duty_type)
 
-    offline_end  = (online_header_row - 1) if online_header_row else len(raw)
-    online_start = (online_header_row + 2) if online_header_row else None
-
-    slots_offline = parse_ig_section(raw, 1, offline_end, "Offline")
-    slots_online  = parse_ig_section(raw, online_start, len(raw), "Online") if online_start else []
+    log("")
+    log("  Loading exam slots...")
+    slots_offline = load_duty_file(OFFLINE_FILE, "Offline", log)
+    slots_online  = load_duty_file(ONLINE_FILE,  "Online",  log)
     ALL_SLOTS     = slots_offline + slots_online
     N_SLOTS       = len(ALL_SLOTS)
 
-    log(f"\n  Exam slots: {N_SLOTS}  ({len(slots_offline)} offline + {len(slots_online)} online)")
+    log(f"  Exam slots parsed: {N_SLOTS}  ({len(slots_offline)} offline + {len(slots_online)} online)")
+    if N_SLOTS == 0:
+        raise RuntimeError(
+            "No exam slots found.\n"
+            "Ensure Offline_Duty.xlsx and/or Online_Duty.xlsx are in your GitHub repo.\n"
+            "Each file: col A = Date, col B = FN/AN, col C = number required."
+        )
     log(f"  Assignments needed: {sum(s['required'] for s in ALL_SLOTS)}")
 
     # ── Build Expanded Willingness ── #
@@ -704,21 +805,14 @@ def run_optimizer(log_box):
 
 @st.cache_data
 def load_ig_slots():
-    if not os.path.exists(IG_FILE):
-        return (pd.DataFrame(columns=["Date","Session","Required"]),
-                pd.DataFrame(columns=["Date","Session","Required"]))
-    raw = pd.read_excel(IG_FILE, header=None)
-    online_hr = None
-    for i in range(len(raw)):
-        cell = str(raw.iloc[i, 0])
-        if "GCR Online" in cell or "online exams" in cell.lower():
-            online_hr = i; break
-    off_end = (online_hr - 1) if online_hr else len(raw)
-    on_start= (online_hr + 2) if online_hr else None
+    """
+    Load exam slots from Offline_Duty.xlsx and Online_Duty.xlsx for the calendar display.
+    """
+    empty = pd.DataFrame(columns=["Date","Session","Required"])
 
     def to_df(slots):
         if not slots:
-            df = pd.DataFrame(columns=["Date","Session","Required"])
+            df = empty.copy()
             df["Date"] = pd.to_datetime(df["Date"])
             return df
         df = pd.DataFrame(slots)
@@ -727,8 +821,22 @@ def load_ig_slots():
         df["Required"] = pd.to_numeric(df["required"], errors="coerce").fillna(1).astype(int)
         return df[["Date","Session","Required"]]
 
-    return (to_df(parse_ig_section(raw, 1, off_end, "Offline")),
-            to_df(parse_ig_section(raw, on_start, len(raw), "Online") if on_start else []))
+    def read_file(filepath, duty_type):
+        if not os.path.exists(filepath):
+            return []
+        try:
+            raw = pd.read_excel(filepath, header=None)
+            try:
+                pd.to_datetime(raw.iloc[0, 0])
+                start = 0
+            except Exception:
+                start = 1
+            return parse_ig_section(raw, start, len(raw), duty_type)
+        except Exception:
+            return []
+
+    return (to_df(read_file(OFFLINE_FILE, "Offline")),
+            to_df(read_file(ONLINE_FILE,  "Online")))
 
 
 # ═══════════════════════════════════════════════════════════════ #
@@ -825,6 +933,16 @@ if panel_mode == "Admin View":
                 st.error("Invalid admin password.")
     else:
         st.success("✅ Admin view unlocked.")
+
+        st.info(
+            "**How this works:**\n\n"
+            "1. Faculty submit willingness via the **User View → Willingness** tab.\n"
+            "2. Admin downloads the CSV from the **Willingness Records** tab below.\n"
+            "3. Open the CSV in Excel, save as **`Willingness.xlsx`**, upload to GitHub repo.\n"
+            "4. Come back here and click **Run Optimizer** — it reads directly from that file.\n"
+            "5. Download results from **View Results** tab and share via Allotment view."
+        )
+
         tab1, tab2, tab3 = st.tabs([
             "📋 Willingness Records",
             "🤖 Run Optimizer",
@@ -834,56 +952,73 @@ if panel_mode == "Admin View":
         # ──────────────────────────────────────────────
         with tab1:
             st.markdown("### Submitted Willingness Records")
-            w_admin = load_willingness().drop(columns=["FacultyClean"], errors="ignore")
+            st.markdown(
+                "Shows willingness from **`Willingness.xlsx`** in your GitHub repo "
+                "plus any new submissions in this session."
+            )
+            w_admin = get_all_willingness_for_display()
             if w_admin.empty:
-                st.info("No willingness submissions yet.")
+                st.info(
+                    "No willingness data found.  \n"
+                    "Faculty can submit via **User View → Willingness**, then download the CSV "
+                    "below and upload to GitHub as **`Willingness.xlsx`**."
+                )
             else:
                 vdf = w_admin.copy().reset_index(drop=True)
                 if "Sl.No" not in vdf.columns:
                     vdf.insert(0, "Sl.No", vdf.index + 1)
-                # Metrics
                 submitted_count = vdf["Faculty"].nunique() if "Faculty" in vdf.columns else 0
                 total_fac       = len(faculty_df)
                 not_submitted   = total_fac - submitted_count
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Faculty Submitted", submitted_count)
-                c2.metric("Not Submitted", not_submitted)
+                c2.metric("Not Yet Submitted", not_submitted)
                 c3.metric("Total Rows", len(vdf))
                 st.dataframe(vdf, use_container_width=True, hide_index=True)
-                st.download_button("⬇ Download Willingness CSV",
-                                   data=vdf.to_csv(index=False).encode("utf-8"),
-                                   file_name="Willingness_Admin_View.csv",
-                                   mime="text/csv")
+
+                csv_bytes = vdf[["Faculty","Date","Session"]].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇ Download Willingness CSV",
+                    data=csv_bytes,
+                    file_name="Willingness_Submissions.csv",
+                    mime="text/csv",
+                    help="Download this CSV, convert to Excel, save as Willingness.xlsx, then upload to GitHub.",
+                )
+                st.caption(
+                    "📌 **Steps:** Download CSV → open in Excel → "
+                    "save as **Willingness.xlsx** → upload to your GitHub repo → "
+                    "then run the optimizer from the **Run Optimizer** tab."
+                )
 
             st.markdown("---")
-            st.markdown("#### ⚠ Delete All Willingness Records")
-            st.checkbox("I confirm deletion of all submitted willingness records",
+            st.markdown("#### ⚠ Clear In-Session Submissions")
+            st.checkbox("I confirm clearing all in-session willingness records",
                         key="confirm_delete_willingness")
-            if st.button("Delete All Willingness", type="primary", key="del_will_btn"):
+            if st.button("Clear Session Submissions", type="primary", key="del_will_btn"):
                 if st.session_state.confirm_delete_willingness:
-                    pd.DataFrame(columns=["Faculty","Date","Session"]).to_excel(WILLINGNESS_FILE, index=False)
-                    st.success("All willingness records deleted.")
+                    delete_all_willingness()
+                    st.success("In-session submissions cleared.")
                     st.session_state.confirm_delete_willingness = False
                     st.rerun()
                 else:
-                    st.error("Please confirm the deletion checkbox before proceeding.")
+                    st.error("Please confirm the checkbox before proceeding.")
 
         # ──────────────────────────────────────────────
         with tab2:
             st.markdown("### 🤖 Run Allocation Optimizer")
             st.markdown("""
-**Required files in app directory:**
-- `Faculty_Master.xlsx` — Name, Designation columns (rows must be in designation-group order)
-- `IG_Willingness.xlsx` — Exam slot schedule (offline rows first, then Online section header)
-- `Willingness.xlsx`    — Auto-generated from faculty portal submissions
+**Files required in your GitHub repo:**
+- `Faculty_Master.xlsx` — faculty list with Name and Designation columns
+- `Offline_Duty.xlsx` — offline exam slots (col A: Date, col B: FN/AN, col C: count)
+- `Online_Duty.xlsx` — online exam slots (same format)
+- `Willingness.xlsx` — collected faculty willingness (Faculty | Date | Session)
             """)
 
-            required_files = [FACULTY_FILE, IG_FILE, WILLINGNESS_FILE]
-            missing = [f for f in required_files if not os.path.exists(f)]
-            if missing:
-                st.error(f"Missing required file(s): {', '.join(missing)}")
+            missing_files = [f for f in [FACULTY_FILE, OFFLINE_FILE] if not os.path.exists(f)]
+            if missing_files:
+                st.error(f"Missing required file(s): {', '.join(missing_files)}")
             else:
-                w_now = load_willingness()
+                w_now   = get_all_willingness_for_optimizer()
                 sub_cnt = w_now["Faculty"].nunique() if "Faculty" in w_now.columns and not w_now.empty else 0
                 tot_fac = len(faculty_df)
                 c1, c2, c3 = st.columns(3)
@@ -892,11 +1027,11 @@ if panel_mode == "Admin View":
                 c3.metric("Willingness Rows", len(w_now))
                 if not SCIPY_AVAILABLE:
                     st.error(
-                        "**scipy is not installed.**  \n"
-                        "Add `scipy` to your `requirements.txt` file and redeploy the app on Streamlit Cloud."
+                        "**scipy is not installed.** "
+                        "Add `scipy` to your `requirements.txt` and redeploy."
                     )
                 else:
-                    st.success("All required files found. Ready to optimise.")
+                    st.success(f"✅ Ready — {sub_cnt} faculty willingness loaded from Willingness.xlsx.")
                     if st.button("▶ Run Optimizer", type="primary",
                                  use_container_width=True, key="run_opt_btn"):
                         log_box = st.empty()
@@ -1224,18 +1359,7 @@ with left:
         use_container_width=True,
     )
     if submitted:
-        new_rows = [
-            {"Faculty": selected_name,
-             "Date": item["Date"].strftime("%d-%m-%Y"),
-             "Session": item["Session"]}
-            for item in st.session_state.selected_slots
-        ]
-        out_df = pd.concat(
-            [w_df.drop(columns=["FacultyClean"], errors="ignore"),
-             pd.DataFrame(new_rows)],
-            ignore_index=True,
-        )
-        out_df.to_excel(WILLINGNESS_FILE, index=False)
+        save_willingness(selected_name, st.session_state.selected_slots)
         st.toast("Thank you for submitting your willingness! ✅", icon="✅")
         st.success(
             "The University Examination Committee thanks you for submitting your willingness. "
