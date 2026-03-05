@@ -592,7 +592,8 @@ def run_optimizer(log_box):
 
     alloc_df["Date"] = pd.to_datetime(alloc_df["Date"]).dt.strftime("%d-%m-%Y")
     alloc_df = alloc_df.sort_values(["Date","Session","Name"]).reset_index(drop=True)
-    alloc_df.insert(0, "Sl.No", alloc_df.index + 1)
+    if "Sl.No" not in alloc_df.columns:
+        alloc_df.insert(0, "Sl.No", alloc_df.index + 1)
 
     # Per-faculty summary
     summary_rows = []
@@ -717,11 +718,13 @@ def load_ig_slots():
 
     def to_df(slots):
         if not slots:
-            return pd.DataFrame(columns=["Date","Session","Required"])
+            df = pd.DataFrame(columns=["Date","Session","Required"])
+            df["Date"] = pd.to_datetime(df["Date"])
+            return df
         df = pd.DataFrame(slots)
-        df["Date"]     = pd.to_datetime(df["date"])
-        df["Session"]  = df["session"]
-        df["Required"] = df["required"]
+        df["Date"]     = pd.to_datetime(df["date"], errors="coerce")
+        df["Session"]  = df["session"].astype(str).str.strip().str.upper()
+        df["Required"] = pd.to_numeric(df["required"], errors="coerce").fillna(1).astype(int)
         return df[["Date","Session","Required"]]
 
     return (to_df(parse_ig_section(raw, 1, off_end, "Offline")),
@@ -836,7 +839,8 @@ if panel_mode == "Admin View":
                 st.info("No willingness submissions yet.")
             else:
                 vdf = w_admin.copy().reset_index(drop=True)
-                vdf.insert(0, "Sl.No", vdf.index + 1)
+                if "Sl.No" not in vdf.columns:
+                    vdf.insert(0, "Sl.No", vdf.index + 1)
                 # Metrics
                 submitted_count = vdf["Faculty"].nunique() if "Faculty" in vdf.columns else 0
                 total_fac       = len(faculty_df)
@@ -1105,8 +1109,10 @@ valuation_dates = valuation_dates_for_faculty(faculty_row)
 valuation_set   = set(valuation_dates)
 
 offline_opts = offline_df[["Date","Session"]].drop_duplicates().sort_values(["Date","Session"]).copy()
+offline_opts["Date"] = pd.to_datetime(offline_opts["Date"], errors="coerce")
 offline_opts["DateOnly"] = offline_opts["Date"].dt.date
 online_opts  = online_df[["Date","Session"]].drop_duplicates().sort_values(["Date","Session"]).copy()
+online_opts["Date"] = pd.to_datetime(online_opts["Date"], errors="coerce")
 online_opts["DateOnly"]  = online_opts["Date"].dt.date
 
 if desig_key == "P":
