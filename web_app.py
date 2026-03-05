@@ -1,27 +1,3 @@
-"""
-SASTRA SoME Examination Duty Portal — Combined App
-====================================================
-Single Streamlit file combining:
-  1. Faculty willingness collection
-  2. Admin view (records, delete, download)
-  3. Run MILP optimizer (HiGHS via scipy) directly from UI
-  4. Allotment view per faculty + WhatsApp share
-
-Required files alongside app.py:
-  Faculty_Master.xlsx   — columns: Name, Designation  (+ optional V1..V5, QP_DATE cols)
-  IG_Willingness.xlsx   — exam schedule (offline rows first, then Online section header)
-  sastra_logo.png       — (optional) branding logo
-
-Auto-generated files:
-  Willingness.xlsx      — grows as faculty submit
-  Final_Allocation.xlsx — optimizer output
-  Allocation_Report.xlsx — detailed sheets
-
-Login credentials:
-  Faculty portal  : SASTRA / SASTRA
-  Admin panel     : sathya
-"""
-
 import os, datetime, warnings, calendar as calmod, urllib.parse
 import numpy as np
 import pandas as pd
@@ -1236,3 +1212,4 @@ with right:
 
 st.markdown("---")
 st.markdown("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
+
