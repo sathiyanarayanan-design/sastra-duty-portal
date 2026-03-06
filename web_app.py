@@ -1658,7 +1658,7 @@ if user_mode == "Allotment":
     st.markdown(
         "<div style='margin-top:10px;padding:10px 14px;background:#f1f5f9;"
         "border-radius:8px;border:1px solid #cbd5e1;font-size:.82rem;color:#475569'>"
-        "📩 For any specific support or clarification regarding your duty allotment, "
+        "📩 For any specific support, "
         "please contact the <strong>University Examination Committee, "
         "School of Mechanical Engineering (SoME)</strong>."
         "</div>",
@@ -1888,3 +1888,4 @@ with right:
 
 st.markdown("---")
 st.caption("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
+
