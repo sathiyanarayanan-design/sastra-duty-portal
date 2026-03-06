@@ -1722,6 +1722,9 @@ left, right = st.columns([1, 1.4])
 with left:
     st.subheader("Willingness Submission")
     st.write(f"**Designation:** {DESIG_FULL.get(desig2, desig2)}")
+    duties_min, duties_max = DESIG_RULES.get(desig2, (0, 0, []))[:2]
+    duties_label = str(duties_min) if duties_min == duties_max else f"{duties_min}–{duties_max}"
+    st.write(f"**Duties to be Allotted:** {duties_label}")
     st.write(f"**Options to Select:** {req_cnt}")
 
     # ── Allotment consideration notice ────────────────────────────
