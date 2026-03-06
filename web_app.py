@@ -627,6 +627,26 @@ def render_calendar(duty_df, val_dates, title):
         )
         rect = base.mark_rect(stroke="white").encode(
             color=alt.Color("Category:N", scale=cscale, legend=alt.Legend(title="Legend")))
+
+        # Session label (FN / AN) at top of each half
+        session_text = base.mark_text(
+            color="black", fontSize=8, fontWeight="bold", dy=-14
+        ).encode(
+            text=alt.Text("Session:N")
+        )
+
+        # Required count number in the centre of each half
+        duty_count_text = base.mark_text(
+            color="black", fontSize=11, fontWeight="bold", dy=4
+        ).encode(
+            text=alt.condition(
+                alt.datum.Required > 0,
+                alt.Text("Required:Q"),
+                alt.value("")
+            )
+        )
+
+        # Day-of-month number — only on FN half, top-left area
         day_text = (
             alt.Chart(frame[frame["Session"] == "FN"])
             .mark_text(color="black", fontSize=11, dy=-6)
@@ -635,8 +655,12 @@ def render_calendar(duty_df, val_dates, title):
                 y=alt.Y("Week:O", sort="ascending"),
                 text=alt.Text("DayNum:Q"))
         )
-        st.altair_chart((rect + day_text).properties(height=230), use_container_width=True)
-        st.caption("Left half = FN  |  Right half = AN")
+
+        st.altair_chart(
+            (rect + duty_count_text + session_text + day_text).properties(height=260),
+            use_container_width=True
+        )
+        st.caption("Left half = FN  |  Right half = AN  |  Numbers = duties required")
 
 
 # ═══════════════════════════════════════════════════════════════ #
