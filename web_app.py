@@ -604,93 +604,136 @@ def render_calendar(duty_df, val_dates, title):
     if duty_df.empty:
         st.info("No slot data available.")
         return
-    months = sorted({(d.year, d.month) for d in duty_df["Date"]})
-    cscale = alt.Scale(
-        domain=["No Duty", "Low (<3)", "Medium (3-7)", "High (>7)", "Valuation Locked"],
-        range=["#ececec", "#2ca02c", "#f1c40f", "#d62728", "#ff69b4"]
-    )
-    st.markdown(
-        "**Legend:** ⬜ No Duty &nbsp;🟩 Low (<3) &nbsp;🟨 Medium (3-7) "
-        "&nbsp;🟥 High (>7) &nbsp;🩷 Valuation Locked"
-    )
+
+    CAT_COLORS = {
+        "No Duty":          "#f1f5f9",
+        "Low (<3)":         "#bbf7d0",
+        "Medium (3-7)":     "#fef08a",
+        "High (>7)":        "#fca5a5",
+        "Valuation Locked": "#f9a8d4",
+    }
     WD_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
+    st.markdown(
+        "**Legend:** "
+        "<span style='background:#f1f5f9;padding:2px 8px;border-radius:4px;border:1px solid #cbd5e1'>⬜ No Duty</span>&nbsp;"
+        "<span style='background:#bbf7d0;padding:2px 8px;border-radius:4px;border:1px solid #86efac'>🟩 Low (&lt;3)</span>&nbsp;"
+        "<span style='background:#fef08a;padding:2px 8px;border-radius:4px;border:1px solid #fde047'>🟨 Medium (3-7)</span>&nbsp;"
+        "<span style='background:#fca5a5;padding:2px 8px;border-radius:4px;border:1px solid #f87171'>🟥 High (&gt;7)</span>&nbsp;"
+        "<span style='background:#f9a8d4;padding:2px 8px;border-radius:4px;border:1px solid #f472b6'>🩷 Valuation Locked</span>",
+        unsafe_allow_html=True
+    )
+
+    months = sorted({(d.year, d.month) for d in duty_df["Date"]})
+
+    # Build lookup: (date, session) → (required, category)
+    sg = duty_df.groupby(["Date", "Session"], as_index=False)["Required"].sum()
+    duty_map = {}
+    for _, row in sg.iterrows():
+        d = row["Date"].date()
+        s = str(row["Session"]).upper()
+        duty_map[(d, s)] = int(row["Required"])
+
+    val_set = set(val_dates)
+
     for yr, mo in months:
-        frame = calendar_frame(duty_df, set(val_dates), yr, mo)
+        ms   = pd.Timestamp(year=yr, month=mo, day=1)
+        me   = ms + pd.offsets.MonthEnd(0)
+        days = pd.date_range(ms, me, freq="D")
+
+        # Group days by week row (same as calendar grid)
+        fw = ms.weekday()  # 0=Mon
+        # Build a 6-row × 7-col grid (None where no date)
+        grid = []
+        week = [None] * fw
+        for dt in days:
+            week.append(dt.date())
+            if len(week) == 7:
+                grid.append(week)
+                week = []
+        if week:
+            week += [None] * (7 - len(week))
+            grid.append(week)
+
         st.markdown(f"**{calmod.month_name[mo]} {yr}**")
 
-        # ── Shared FN | AN header ABOVE the chart ─────────────────
-        st.markdown(
-            "<div style='display:flex;justify-content:flex-end;"
-            "gap:6px;margin-bottom:2px;padding-right:4px'>"
-            "<span style='font-size:.8rem;font-weight:700;color:#0b3a67;"
-            "background:#dbeafe;border-radius:4px;padding:2px 10px'>FN &nbsp;|&nbsp; AN</span>"
-            "<span style='font-size:.78rem;color:#64748b;padding:2px 4px'>"
-            "← each cell: left = FN, right = AN</span>"
-            "</div>",
-            unsafe_allow_html=True
+        # ── Build HTML table ──────────────────────────────────────
+        th_style = ("background:#1e3a5f;color:#fff;font-size:.82rem;font-weight:700;"
+                    "padding:6px 0;text-align:center;border:1px solid #334155;")
+        sess_style = ("background:#dbeafe;color:#1e3a5f;font-size:.75rem;font-weight:700;"
+                      "padding:3px 0;text-align:center;border:1px solid #bfdbfe;width:42px;")
+
+        # Header row 1: weekdays spanning 2 cols each
+        hdr1 = "".join(
+            f"<th colspan='2' style='{th_style}'>{wd}</th>"
+            for wd in WD_ORDER
         )
 
-        # Pivot: one row per (Week, Weekday), separate cols for FN and AN
-        fn_frame = frame[frame["Session"] == "FN"][
-            ["Week", "Weekday", "DayNum", "DateLabel", "Required", "Category"]
-        ].rename(columns={
-            "Required": "FN_Required", "Category": "FN_Category", "DateLabel": "FN_DateLabel"
-        })
-        an_frame = frame[frame["Session"] == "AN"][
-            ["Week", "Weekday", "Required", "Category", "DateLabel"]
-        ].rename(columns={
-            "Required": "AN_Required", "Category": "AN_Category", "DateLabel": "AN_DateLabel"
-        })
-        merged = fn_frame.merge(an_frame, on=["Week", "Weekday"], how="left")
-
-        # Melt back for Altair — keep date shown once, session as xOffset
-        base = alt.Chart(frame).encode(
-            x=alt.X("Weekday:N", sort=WD_ORDER,
-                    axis=alt.Axis(title=None, labelFontSize=12, orient="top",
-                                  ticks=False, domain=False, labelPadding=6)),
-            xOffset=alt.XOffset("Session:N", sort=["FN", "AN"]),
-            y=alt.Y("Week:O", sort="ascending",
-                    axis=alt.Axis(title=None, labels=False, ticks=False, domain=False)),
-            tooltip=[
-                alt.Tooltip("DateLabel:N", title="Date"),
-                alt.Tooltip("Session:N",   title="Session"),
-                alt.Tooltip("Required:Q",  title="Duties Required"),
-                alt.Tooltip("Category:N",  title="Category"),
-            ]
+        # Header row 2: FN | AN repeated for each weekday
+        hdr2 = "".join(
+            f"<th style='{sess_style}'>FN</th><th style='{sess_style}'>AN</th>"
+            for _ in WD_ORDER
         )
 
-        rect = base.mark_rect(stroke="white", strokeWidth=1).encode(
-            color=alt.Color("Category:N", scale=cscale, legend=alt.Legend(title="Legend"))
-        )
+        # Data rows
+        rows_html = ""
+        for week_dates in grid:
+            row_html = ""
+            for dt in week_dates:
+                if dt is None:
+                    row_html += "<td style='border:1px solid #e2e8f0;background:#f8fafc'></td>"
+                    row_html += "<td style='border:1px solid #e2e8f0;background:#f8fafc'></td>"
+                else:
+                    day_num = dt.day
+                    is_val  = dt in val_set
+                    for sess in ["FN", "AN"]:
+                        req = duty_map.get((dt, sess), 0)
+                        if is_val:
+                            cat = "Valuation Locked"
+                        else:
+                            if req == 0:   cat = "No Duty"
+                            elif req < 3:  cat = "Low (<3)"
+                            elif req <= 7: cat = "Medium (3-7)"
+                            else:          cat = "High (>7)"
+                        bg = CAT_COLORS[cat]
+                        # Date number only in FN cell, bold
+                        if sess == "FN":
+                            cell_html = (
+                                f"<div style='font-size:.75rem;font-weight:900;"
+                                f"color:#0f172a;line-height:1.1'>{day_num}</div>"
+                            )
+                        else:
+                            cell_html = ""
+                        # Duty count
+                        if req > 0 and not is_val:
+                            cell_html += (
+                                f"<div style='font-size:.9rem;font-weight:700;"
+                                f"color:#1e293b;line-height:1.4'>{req}</div>"
+                            )
+                        row_html += (
+                            f"<td style='background:{bg};border:1px solid #e2e8f0;"
+                            f"text-align:center;padding:4px 2px;min-width:38px;"
+                            f"vertical-align:middle'>{cell_html}</td>"
+                        )
+            rows_html += f"<tr>{row_html}</tr>"
 
-        # Duty count centred in each half-cell (only when > 0)
-        duty_text = base.mark_text(
-            color="black", fontSize=12, fontWeight="bold"
-        ).encode(
-            text=alt.condition(
-                alt.datum.Required > 0,
-                alt.Text("Required:Q"),
-                alt.value("")
-            )
-        )
+        table_html = f"""
+<div style="overflow-x:auto;margin-bottom:18px">
+<table style="border-collapse:collapse;width:100%;table-layout:fixed;
+              font-family:sans-serif;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden">
+  <thead>
+    <tr>{hdr1}</tr>
+    <tr>{hdr2}</tr>
+  </thead>
+  <tbody>
+    {rows_html}
+  </tbody>
+</table>
+</div>
+"""
+        st.markdown(table_html, unsafe_allow_html=True)
 
-        # Day-of-month — only on FN half, small, top of cell
-        day_text = (
-            alt.Chart(frame[frame["Session"] == "FN"])
-            .mark_text(color="#1e293b", fontSize=9, dy=-10, dx=-2)
-            .encode(
-                x=alt.X("Weekday:N", sort=WD_ORDER),
-                y=alt.Y("Week:O", sort="ascending"),
-                text=alt.Text("DayNum:Q")
-            )
-        )
-
-        st.altair_chart(
-            (rect + duty_text + day_text).properties(height=200),
-            use_container_width=True
-        )
-        st.caption("Numbers = duties required  |  Left half of cell = FN, Right half = AN")
+    st.caption("FN = Forenoon  |  AN = Afternoon  |  Numbers = duties required  |  Bold = date")
 
 
 # ═══════════════════════════════════════════════════════════════ #
