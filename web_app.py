@@ -681,41 +681,123 @@ def render_calendar(duty_df, val_dates, title):
             row_html = ""
             for dt in week_dates:
                 if dt is None:
-                    row_html += "<td style='border:1px solid #e2e8f0;background:#f8fafc'></td>"
-                    row_html += "<td style='border:1px solid #e2e8f0;background:#f8fafc'></td>"
+                    row_html += "<td colspan='2' style='border:1px solid #e2e8f0;background:#f8fafc;min-width:76px'></td>"
                 else:
                     day_num = dt.day
                     is_val  = dt in val_set
-                    for sess in ["FN", "AN"]:
-                        req = duty_map.get((dt, sess), 0)
-                        if is_val:
-                            cat = "Valuation Locked"
-                        else:
-                            if req == 0:   cat = "No Duty"
-                            elif req < 3:  cat = "Low (<3)"
-                            elif req <= 7: cat = "Medium (3-7)"
-                            else:          cat = "High (>7)"
-                        bg = CAT_COLORS[cat]
-                        # Date number only in FN cell, bold
-                        if sess == "FN":
-                            cell_html = (
-                                f"<div style='font-size:.75rem;font-weight:900;"
-                                f"color:#0f172a;line-height:1.1'>{day_num}</div>"
-                            )
-                        else:
-                            cell_html = ""
-                        # Duty count
+                    fn_req  = duty_map.get((dt, "FN"), 0)
+                    an_req  = duty_map.get((dt, "AN"), 0)
+
+                    def cat(req):
+                        if is_val:     return "Valuation Locked"
+                        if req == 0:   return "No Duty"
+                        if req < 3:    return "Low (<3)"
+                        if req <= 7:   return "Medium (3-7)"
+                        return "High (>7)"
+
+                    fn_bg = CAT_COLORS[cat(fn_req)]
+                    an_bg = CAT_COLORS[cat(an_req)]
+
+                    def duty_html(req):
                         if req > 0 and not is_val:
-                            cell_html += (
-                                f"<div style='font-size:.9rem;font-weight:700;"
-                                f"color:#1e293b;line-height:1.4'>{req}</div>"
+                            return (
+                                f"<div style='font-size:.72rem;font-style:italic;"
+                                f"font-weight:600;color:#1d4ed8;line-height:1.6;"
+                                f"letter-spacing:.01em'>{req}</div>"
                             )
-                        row_html += (
-                            f"<td style='background:{bg};border:1px solid #e2e8f0;"
-                            f"text-align:center;padding:4px 2px;min-width:38px;"
-                            f"vertical-align:middle'>{cell_html}</td>"
-                        )
+                        return "<div style='min-height:18px'></div>"
+
+                    # Date number centred across both FN+AN as a top colspan row
+                    # achieved by a mini nested table inside the two <td>s
+                    fn_cell = (
+                        f"<td style='background:{fn_bg};border:1px solid #e2e8f0;"
+                        f"text-align:center;padding:2px 2px 4px 2px;"
+                        f"vertical-align:bottom;min-width:38px'>"
+                        f"{duty_html(fn_req)}</td>"
+                    )
+                    an_cell = (
+                        f"<td style='background:{an_bg};border:1px solid #e2e8f0;"
+                        f"text-align:center;padding:2px 2px 4px 2px;"
+                        f"vertical-align:bottom;min-width:38px'>"
+                        f"{duty_html(an_req)}</td>"
+                    )
+                    row_html += fn_cell + an_cell
+
             rows_html += f"<tr>{row_html}</tr>"
+
+        # Date number row — one cell per date, colspan=2, sits above FN/AN duty rows
+        # We rebuild as two <tr> per week: date row + duty row
+        rows_html = ""
+        for week_dates in grid:
+            # --- date number row ---
+            date_row = ""
+            for dt in week_dates:
+                if dt is None:
+                    date_row += (
+                        "<td colspan='2' style='border:1px solid #e2e8f0;"
+                        "background:#f8fafc;height:18px'></td>"
+                    )
+                else:
+                    is_val  = dt in val_set
+                    fn_req  = duty_map.get((dt, "FN"), 0)
+                    an_req  = duty_map.get((dt, "AN"), 0)
+                    # background: blend or use FN bg for date row
+                    def cat(req):
+                        if is_val:     return "Valuation Locked"
+                        if req == 0:   return "No Duty"
+                        if req < 3:    return "Low (<3)"
+                        if req <= 7:   return "Medium (3-7)"
+                        return "High (>7)"
+                    # date cell spans both FN and AN columns
+                    date_row += (
+                        f"<td colspan='2' style='background:#f1f5f9;"
+                        f"border:1px solid #e2e8f0;text-align:center;"
+                        f"padding:3px 2px 1px 2px;vertical-align:middle'>"
+                        f"<span style='font-size:.85rem;font-weight:900;"
+                        f"color:#0f172a'>{dt.day}</span></td>"
+                    )
+            rows_html += f"<tr>{date_row}</tr>"
+
+            # --- duty row ---
+            duty_row = ""
+            for dt in week_dates:
+                if dt is None:
+                    duty_row += (
+                        "<td style='border:1px solid #e2e8f0;background:#f8fafc;min-width:38px'></td>"
+                        "<td style='border:1px solid #e2e8f0;background:#f8fafc;min-width:38px'></td>"
+                    )
+                else:
+                    is_val = dt in val_set
+                    fn_req = duty_map.get((dt, "FN"), 0)
+                    an_req = duty_map.get((dt, "AN"), 0)
+
+                    def cat(req):
+                        if is_val:     return "Valuation Locked"
+                        if req == 0:   return "No Duty"
+                        if req < 3:    return "Low (<3)"
+                        if req <= 7:   return "Medium (3-7)"
+                        return "High (>7)"
+
+                    fn_bg = CAT_COLORS[cat(fn_req)]
+                    an_bg = CAT_COLORS[cat(an_req)]
+
+                    def duty_span(req):
+                        if req > 0 and not is_val:
+                            return (
+                                f"<span style='font-size:.78rem;font-style:italic;"
+                                f"font-weight:700;color:#1d4ed8'>{req}</span>"
+                            )
+                        return ""
+
+                    duty_row += (
+                        f"<td style='background:{fn_bg};border:1px solid #e2e8f0;"
+                        f"text-align:center;padding:3px 2px;min-width:38px;"
+                        f"vertical-align:middle'>{duty_span(fn_req)}</td>"
+                        f"<td style='background:{an_bg};border:1px solid #e2e8f0;"
+                        f"text-align:center;padding:3px 2px;min-width:38px;"
+                        f"vertical-align:middle'>{duty_span(an_req)}</td>"
+                    )
+            rows_html += f"<tr>{duty_row}</tr>"
 
         table_html = f"""
 <div style="overflow-x:auto;margin-bottom:18px">
