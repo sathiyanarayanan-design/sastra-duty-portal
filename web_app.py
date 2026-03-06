@@ -1027,12 +1027,13 @@ def run_optimizer(log_box):
     total_online_seats  = sum(sl["required"] for sl in ALL_S if sl["type"] == "Online")
     p_online_count      = len(dgroups.get("P", []))   # each P takes exactly 1 online
     acp_online_needed   = max(0, total_online_seats - p_online_count)
-    # How many ACP need 2 online to cover the demand?
-    # Standard allocation: each ACP covers 1 online → covers n_acp online slots
-    # Extra online needed beyond standard:
-    extra_online = max(0, acp_online_needed - n_acp)
-    n_double_online = min(extra_online, n_acp)      # first N ACPs get 2 online
-    n_double_offline = n_double_online               # last N ACPs get 2 offline to balance
+    # How many ACP need 2 online?
+    # Each ACP standard = 1 online. Each P = 1 online.
+    # Total covered standard = nP + nACP.
+    # Shortfall = total_online_seats - nP - nACP → these ACPs must take 2 online.
+    n_double_online  = max(0, total_online_seats - p_online_count - n_acp)
+    n_double_online  = min(n_double_online, n_acp // 2)   # can't exceed half the cadre
+    n_double_offline = n_double_online                     # last N ACPs take 2 offline to balance
     n_double_offline = min(n_double_offline, n_acp - n_double_online)
 
     log(f"\n  ACP cadre split    : {n_acp} total | "
