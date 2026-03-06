@@ -59,6 +59,15 @@ DESIG_RULES = {
     "TA":  (3, 3, ["Offline"]),
     "RA":  (4, 4, ["Offline"]),
 }
+DESIG_FULL = {
+    "P":   "Professor",
+    "ACP": "Associate Professor",
+    "SAP": "Senior Assistant Professor",
+    "AP3": "Assistant Professor - III",
+    "AP2": "Assistant Professor - II",
+    "TA":  "Teaching Assistant",
+    "RA":  "Research Assistant",
+}
 DUTY_STRUCTURE = {"P": 3, "ACP": 5, "SAP": 7, "AP3": 7, "AP2": 7, "TA": 9, "RA": 9}
 
 # ── Willingness match scores ──────────────────────────────────── #
@@ -1712,7 +1721,7 @@ left, right = st.columns([1, 1.4])
 
 with left:
     st.subheader("Willingness Submission")
-    st.write(f"**Designation:** {desig2}")
+    st.write(f"**Designation:** {DESIG_FULL.get(desig2, desig2)}")
     st.write(f"**Options to Select:** {req_cnt}")
 
     # ── Allotment consideration notice ────────────────────────────
