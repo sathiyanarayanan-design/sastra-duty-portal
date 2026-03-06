@@ -71,7 +71,8 @@ PENALTY      =     1
 
 WILL_TAGS = {
     "Willingness-Exact", "Willingness-ACPOnline",
-    "Willingness-SessionFlip", "Willingness-±1Day", "Willingness-±2Day"
+    "Willingness-SessionFlip", "Willingness-±1Day", "Willingness-±2Day",
+    "Willingness-ValAdj"
 }
 
 # ─── Page config ─────────────────────────────────────────────── #
@@ -393,13 +394,18 @@ def classify_duty(alloc_by: str, duty_date, duty_sess: str, will_set: set):
                 if (adj, s) in will_set:
                     direction = "after" if delta > 0 else "before"
                     closest = (f"You submitted {adj.strftime('%d-%m-%Y')} {s} "
-                                f"→ duty shifted {abs(delta)} day(s) {direction} "
+                                f"→ duty shifted {abs(delta)} weekday(s) {direction} "
                                 f"to {duty_date.strftime('%d-%m-%Y')} {duty_sess}")
                     break
             if closest:
                 break
         return (f"Date Adjusted ({window})", "📅",
                 closest or f"Allotted within {window} of your submitted willingness", True)
+
+    if ab == "Willingness-ValAdj":
+        return ("Valuation-Adjacent", "🗓️",
+                f"Allotted on a weekday adjacent to your valuation date "
+                f"({duty_date.strftime('%d-%m-%Y')} {duty_sess})", True)
 
     if ab in ("Auto-Assigned", "Gap-Fill"):
         return ("Auto-Assigned", "⚙️",
@@ -442,8 +448,9 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
     n_exact   = sum(1 for d in duty_rows if d["status"] == "Exact Match")
     n_sess    = sum(1 for d in duty_rows if d["status"] == "Session Adjusted")
     n_adj     = sum(1 for d in duty_rows if "Date Adjusted" in d["status"])
+    n_valadj  = sum(1 for d in duty_rows if d["status"] == "Valuation-Adjacent")
     n_no      = sum(1 for d in duty_rows if not d["is_matched"])
-    n_matched = n_exact + n_sess + n_adj
+    n_matched = n_exact + n_sess + n_adj + n_valadj
 
     match_pct = n_matched / total * 100 if total else 0.0
     dev_pct   = 100.0 - match_pct
@@ -492,6 +499,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Session Adjusted":       ("#fef3c7", "#92400e"),
         "Date Adjusted (±1 day)": ("#ffedd5", "#9a3412"),
         "Date Adjusted (±2 days)":("#ffedd5", "#9a3412"),
+        "Valuation-Adjacent":     ("#ede9fe", "#5b21b6"),
         "Not in Willingness":     ("#fee2e2", "#991b1b"),
         "Auto-Assigned":          ("#e5e7eb", "#374151"),
     }
@@ -536,20 +544,23 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Category": [
             "✅ Exact Match",
             "🔄 Session Adjusted (FN↔AN, same date)",
-            "📅 Date Adjusted (±1 or ±2 days)",
+            "📅 Date Adjusted (±1 or ±2 weekdays)",
+            "🗓️ Valuation-Adjacent (day before/after val date)",
             "🔴 Not in Willingness / Auto-Assigned",
         ],
-        "Count": [n_exact, n_sess, n_adj, n_no],
+        "Count": [n_exact, n_sess, n_adj, n_valadj, n_no],
         "Share %": [
-            f"{n_exact/total*100:.1f}%" if total else "—",
-            f"{n_sess/total*100:.1f}%"  if total else "—",
-            f"{n_adj/total*100:.1f}%"   if total else "—",
-            f"{n_no/total*100:.1f}%"    if total else "—",
+            f"{n_exact/total*100:.1f}%"   if total else "—",
+            f"{n_sess/total*100:.1f}%"    if total else "—",
+            f"{n_adj/total*100:.1f}%"     if total else "—",
+            f"{n_valadj/total*100:.1f}%"  if total else "—",
+            f"{n_no/total*100:.1f}%"      if total else "—",
         ],
         "Meaning": [
             "Allotted on the exact date & session you submitted",
             "Same date, but morning/afternoon slot was swapped",
-            "Duty shifted 1 or 2 days from your submitted date",
+            "Duty shifted 1 or 2 weekdays from your submitted date",
+            "Allotted on a weekday adjacent to your valuation date",
             "No matching date — system assigned to fill slot",
         ],
     })
@@ -559,14 +570,11 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
     if n_no == 0 and dev_pct == 0:
         dev_lines.append("All duties allotted exactly as per your willingness.")
     else:
-        if n_exact > 0:
-            dev_lines.append(f"  ✅ Exact match      : {n_exact} duty(ies)")
-        if n_sess > 0:
-            dev_lines.append(f"  🔄 Session swapped  : {n_sess} duty(ies) (FN↔AN, same date)")
-        if n_adj > 0:
-            dev_lines.append(f"  📅 Date shifted     : {n_adj} duty(ies) (±1 or ±2 days)")
-        if n_no > 0:
-            dev_lines.append(f"  🔴 System-assigned  : {n_no} duty(ies) (outside willingness window)")
+        if n_exact   > 0: dev_lines.append(f"  ✅ Exact match          : {n_exact} duty(ies)")
+        if n_sess    > 0: dev_lines.append(f"  🔄 Session swapped      : {n_sess} duty(ies) (FN↔AN, same date)")
+        if n_adj     > 0: dev_lines.append(f"  📅 Date shifted         : {n_adj} duty(ies) (±1 or ±2 weekdays)")
+        if n_valadj  > 0: dev_lines.append(f"  🗓️ Valuation-adjacent   : {n_valadj} duty(ies) (day before/after val date)")
+        if n_no      > 0: dev_lines.append(f"  🔴 System-assigned      : {n_no} duty(ies) (outside willingness window)")
 
     match_str = f"Match {match_pct:.1f}%  ({n_matched}/{total})  |  Deviation {dev_pct:.1f}%"
     return match_str, dev_lines
@@ -760,14 +768,16 @@ def run_optimizer(log_box):
         log_box.code("\n".join(log_lines), language="text")
 
     log("=" * 62)
-    log("  SASTRA SoME Duty Optimizer  (HiGHS MILP  –  v2 High-Match)")
+    log("  SASTRA SoME Duty Optimizer  (HiGHS MILP  –  v4)")
+    log("  Rules: val-safe | session-flip | weekday-adj | Sat→TA/RA")
     log("=" * 62)
 
+    # ── Load faculty ──────────────────────────────────────────────
     fr = pd.read_excel(FACULTY_FILE)
     fr.columns = fr.columns.str.strip()
     col_names = fr.columns.tolist()
     if len(col_names) < 2:
-        raise RuntimeError("Faculty_Master.xlsx must have at least 2 columns: Name and Designation.")
+        raise RuntimeError("Faculty_Master.xlsx must have at least 2 columns.")
     fr.rename(columns={col_names[0]: "Name", col_names[1]: "Designation"}, inplace=True)
     fr = fr.dropna(subset=["Name"]).reset_index(drop=True)
     fr["Name"]        = fr["Name"].astype(str).str.strip()
@@ -782,59 +792,123 @@ def run_optimizer(log_box):
     for n, d in fac_d.items(): dgroups[d].append(n)
     log(f"\n  Faculty loaded     : {N_FAC}")
 
+    # ── Per-faculty valuation dates ───────────────────────────────
+    fac_val_dates = {}
+    for _, frow in fr.iterrows():
+        fname  = frow["Name"]
+        vdates = set()
+        for c in ["V1", "V2", "V3", "V4", "V5"]:
+            if c in frow.index and pd.notna(frow[c]):
+                try:
+                    vdates.add(pd.to_datetime(frow[c], dayfirst=True).date())
+                except Exception:
+                    pass
+        fac_val_dates[fname] = vdates
+    log(f"  Valuation dates    : {sum(1 for v in fac_val_dates.values() if v)} faculty have val dates")
+
+    # ── Load willingness ──────────────────────────────────────────
     wdf = get_all_willingness().drop(columns=["FacultyClean"], errors="ignore")
     if not wdf.empty:
         wdf["Date"]    = pd.to_datetime(wdf["Date"], dayfirst=True, errors="coerce")
         wdf["Session"] = wdf["Session"].astype(str).str.strip().str.upper()
         wdf = wdf.dropna(subset=["Date"])
-
     submitted = set(wdf["Faculty"].str.strip().unique()) if not wdf.empty else set()
     non_sub   = [n for n in ALL_FAC if n not in submitted]
     log(f"  Willingness loaded : {len(submitted)} submitted  |  {len(non_sub)} not submitted")
 
     log("")
-    for fp, dt_label in [(OFFLINE_FILE, "Offline"), (ONLINE_FILE, "Online")]:
-        log(f"  {dt_label:8} file : {'✓ ' + fp if os.path.exists(fp) else '✗ MISSING — ' + fp}")
+    for fp, lbl in [(OFFLINE_FILE, "Offline"), (ONLINE_FILE, "Online")]:
+        log(f"  {lbl:8} file : {'✓ ' + fp if os.path.exists(fp) else '✗ MISSING — ' + fp}")
 
+    # ── Load slots ────────────────────────────────────────────────
     s_off = parse_duty_file(OFFLINE_FILE, "Offline")
     s_on  = parse_duty_file(ONLINE_FILE,  "Online")
     ALL_S = s_off + s_on
     NS    = len(ALL_S)
     log(f"  Slots parsed       : {NS}  ({len(s_off)} offline + {len(s_on)} online)")
     if NS == 0:
-        raise RuntimeError("No exam slots found. Check Offline_Duty.xlsx / Online_Duty.xlsx.")
-    total_needed = sum(s["required"] for s in ALL_S)
-    log(f"  Total assignments  : {total_needed}")
+        raise RuntimeError("No exam slots found.")
+    log(f"  Total assignments  : {sum(s['required'] for s in ALL_S)}")
+
+    # ── Saturday slot indices (Rule 3) ────────────────────────────
+    SAT_DESIG = {"TA", "RA"}   # only these may get Saturday duty
+    sat_si    = [i for i, s in enumerate(ALL_S) if s["date"].weekday() == 5]
+    log(f"  Saturday slots     : {len(sat_si)}  (restricted to TA/RA only)")
+
+    # ── Helper: is a date a weekend? ─────────────────────────────
+    def is_weekend(d): return d.weekday() >= 5   # 5=Sat, 6=Sun
+
+    # ══════════════════════════════════════════════════════════════
+    #   SCORE MATRIX  — fexp[faculty][(date, session, type)] = score
+    #   Scoring hierarchy (higher = stronger preference to assign):
+    #     W_EXACT      = exact date + exact session submitted
+    #     W_ACP_ONLINE = ACP offline-date mapped to online slot
+    #     W_FLIP       = same date, opposite session (FN↔AN)      [Rule 1]
+    #     W_ADJ        = ±1 weekday from submitted date            [Rule 2]
+    #     W_ADJ2       = ±2 weekdays from submitted date           [Rule 2]
+    #     W_VAL_ADJ    = adjacent to faculty's own valuation date  [Rule 4]
+    #     W_NON_SUB    = no willingness submitted — any slot OK
+    # ══════════════════════════════════════════════════════════════
+    W_VAL_ADJ = 500   # bonus for slot adjacent to faculty's own valuation date
 
     fexp = defaultdict(dict)
     def set_score(d, k, val): d[k] = max(d.get(k, 0), val)
 
     for _, row in wdf.iterrows():
-        n       = str(row.get("Faculty", "")).strip()
+        n    = str(row.get("Faculty", "")).strip()
         if n not in FAC_IDX: continue
-        dt2     = row["Date"].date()
-        sess    = str(row["Session"]).strip().upper()
-        allowed = DESIG_RULES[fac_d.get(n, "TA")][2]
+        dt2  = row["Date"].date()
+        sess = str(row["Session"]).strip().upper()
+        opp  = "AN" if sess == "FN" else "FN"
+        allowed   = DESIG_RULES[fac_d.get(n, "TA")][2]
+        val_days  = fac_val_dates.get(n, set())
 
+        # Exact match
         for tp in allowed:
             set_score(fexp[n], (dt2, sess, tp), W_EXACT)
+
+        # ACP: offline date usable for online slot too
         if fac_d.get(n) == "ACP":
             for s2 in ["FN", "AN"]:
                 set_score(fexp[n], (dt2, s2, "Online"), W_ACP_ONLINE)
-        opp = "AN" if sess == "FN" else "FN"
+
+        # Rule 1: session flip — same date, opposite session
         for tp in allowed:
             set_score(fexp[n], (dt2, opp, tp), W_FLIP)
+
+        # Rule 2: ±1 weekday (skip Sat/Sun)
         for delta in [-1, +1]:
             adj = dt2 + datetime.timedelta(days=delta)
+            if is_weekend(adj): continue          # skip weekends
             for s2 in ["FN", "AN"]:
                 for tp in allowed:
                     set_score(fexp[n], (adj, s2, tp), W_ADJ)
+
+        # Rule 2: ±2 weekday (skip Sat/Sun)
         for delta in [-2, +2]:
             adj = dt2 + datetime.timedelta(days=delta)
+            if is_weekend(adj): continue
             for s2 in ["FN", "AN"]:
                 for tp in allowed:
                     set_score(fexp[n], (adj, s2, tp), W_ADJ2)
 
+    # Rule 4: bonus score for slots that are ±1 day adjacent to the
+    #         faculty's own valuation date (helps fill those boundary slots)
+    for n in ALL_FAC:
+        allowed  = DESIG_RULES[fac_d.get(n, "TA")][2]
+        val_days = fac_val_dates.get(n, set())
+        for vd in val_days:
+            for delta in [-1, +1]:
+                adj = vd + datetime.timedelta(days=delta)
+                if is_weekend(adj): continue
+                for s2 in ["FN", "AN"]:
+                    for tp in allowed:
+                        k = (adj, s2, tp)
+                        # Only add if not already scored higher
+                        if fexp[n].get(k, 0) < W_VAL_ADJ:
+                            set_score(fexp[n], k, W_VAL_ADJ)
+
+    # Non-submitted: any eligible slot with low base score
     for n in non_sub:
         allowed = DESIG_RULES[fac_d.get(n, "TA")][2]
         for s in ALL_S:
@@ -842,18 +916,38 @@ def run_optimizer(log_box):
                 k = (s["date"], s["session"], s["type"])
                 set_score(fexp[n], k, W_NON_SUB)
 
+    # ── Build MILP variables ──────────────────────────────────────
     def v(fi, si): return fi * NS + si
     NV    = N_FAC * NS
     c_obj = np.zeros(NV)
     lb    = np.zeros(NV)
     ub    = np.ones(NV)
 
+    val_blocked = 0
+    sat_blocked = 0
     for fi, fn in enumerate(ALL_FAC):
-        allowed = DESIG_RULES[fac_d[fn]][2]
+        allowed  = DESIG_RULES[fac_d[fn]][2]
+        val_days = fac_val_dates.get(fn, set())
+        desig    = fac_d[fn]
+
         for si, sl in enumerate(ALL_S):
+            # Hard block: faculty's own valuation date
+            if sl["date"] in val_days:
+                ub[v(fi, si)] = 0.0
+                val_blocked += 1
+                continue
+
+            # Hard block: wrong duty type for designation
             if sl["type"] not in allowed:
                 ub[v(fi, si)] = 0.0
                 continue
+
+            # Rule 3: Saturday duty only for TA and RA
+            if sl["date"].weekday() == 5 and desig not in SAT_DESIG:
+                ub[v(fi, si)] = 0.0
+                sat_blocked += 1
+                continue
+
             k  = (sl["date"], sl["session"], sl["type"])
             sc = fexp[fn].get(k, 0)
             if sc > 0:
@@ -861,6 +955,10 @@ def run_optimizer(log_box):
             elif fn in submitted:
                 c_obj[v(fi, si)] = float(PENALTY)
 
+    log(f"  Valuation-blocked vars : {val_blocked}")
+    log(f"  Saturday-blocked vars  : {sat_blocked}  (non-TA/RA faculty)")
+
+    # ── Build constraints ─────────────────────────────────────────
     rA, cA, dA, blo, bhi = [], [], [], [], []
     nc = [0]
     def add_con(var_ids, coeffs, lo, hi):
@@ -871,48 +969,65 @@ def run_optimizer(log_box):
     on_i  = [i for i, s in enumerate(ALL_S) if s["type"] == "Online"]
     off_i = [i for i, s in enumerate(ALL_S) if s["type"] == "Offline"]
 
+    # C1: Each slot exactly filled
     for si, sl in enumerate(ALL_S):
-        add_con([v(f, si) for f in range(N_FAC)], [1] * N_FAC, sl["required"], sl["required"])
+        add_con([v(f, si) for f in range(N_FAC)], [1] * N_FAC,
+                sl["required"], sl["required"])
+
+    # C2: Each faculty gets exactly their required duties
     for fi, fn in enumerate(ALL_FAC):
         dr = DESIG_RULES[fac_d[fn]]
         add_con([v(fi, s) for s in range(NS)], [1] * NS, dr[0], dr[1])
-    dt_tp = defaultdict(list)
-    for si, sl in enumerate(ALL_S): dt_tp[(sl["date"], sl["type"])].append(si)
+
+    # C3: No faculty on more than 1 duty per calendar date
+    dt_all = defaultdict(list)
+    for si, sl in enumerate(ALL_S):
+        dt_all[sl["date"]].append(si)
     for fi in range(N_FAC):
-        for sil in dt_tp.values():
+        for sil in dt_all.values():
             if len(sil) > 1:
                 add_con([v(fi, si) for si in sil], [1] * len(sil), 0, 1)
+
+    # C4: Professors — exactly 1 online duty
     for fn in dgroups["P"]:
         fi = FAC_IDX[fn]
         if on_i: add_con([v(fi, si) for si in on_i], [1] * len(on_i), 1, 1)
+
+    # C5: ACP — at least 1 online AND at least 1 offline
     for fn in dgroups["ACP"]:
         fi = FAC_IDX[fn]
         if on_i:  add_con([v(fi, si) for si in on_i],  [1] * len(on_i),  1, len(on_i))
         if off_i: add_con([v(fi, si) for si in off_i], [1] * len(off_i), 1, len(off_i))
 
-    WILL_FLOOR = 0.80
+    # C6: Willingness floor — ≥80% of duties from willingness window
+    WILL_FLOOR   = 0.80
     forced_count = 0
     for fn in submitted:
         fi = FAC_IDX.get(fn)
         if fi is None: continue
-        dr    = DESIG_RULES[fac_d[fn]]
-        w_si  = [si for si in range(NS)
-                 if fexp[fn].get((ALL_S[si]["date"], ALL_S[si]["session"], ALL_S[si]["type"]), 0) >= W_ADJ2
-                 and ub[v(fi, si)] > 0]
+        dr   = DESIG_RULES[fac_d[fn]]
+        w_si = [si for si in range(NS)
+                if fexp[fn].get((ALL_S[si]["date"], ALL_S[si]["session"],
+                                 ALL_S[si]["type"]), 0) >= W_ADJ2
+                and ub[v(fi, si)] > 0]
         if not w_si: continue
         floor_val = min(max(1, int(np.floor(dr[0] * WILL_FLOOR))), len(w_si))
-        add_con([v(fi, si) for si in w_si], [1] * len(w_si), floor_val, len(w_si))
+        add_con([v(fi, si) for si in w_si], [1] * len(w_si), floor_val, dr[1])
         forced_count += 1
-    log(f"  Willingness floor constraints added : {forced_count} faculty")
+    log(f"  Willingness floor constraints : {forced_count} faculty")
 
-    A = csc_matrix((dA, (rA, cA)), shape=(nc[0], NV))
+    # ── Solve ─────────────────────────────────────────────────────
+    A   = csc_matrix((dA, (rA, cA)), shape=(nc[0], NV))
     log(f"\n  Variables    : {NV}  |  Constraints : {nc[0]}")
     log("  Solving HiGHS MILP (time limit 300 s)...")
-    res = milp(c=c_obj, constraints=LinearConstraint(A, blo, bhi),
-               integrality=np.ones(NV), bounds=Bounds(lb=lb, ub=ub),
+    res = milp(c=c_obj,
+               constraints=LinearConstraint(A, blo, bhi),
+               integrality=np.ones(NV),
+               bounds=Bounds(lb=lb, ub=ub),
                options={"disp": False, "time_limit": 300})
     log(f"  Status : {res.message}")
 
+    # ── Tag helper ────────────────────────────────────────────────
     def tag(fn, k, sc):
         if fn in non_sub:       return "Auto-Assigned"
         if sc >= W_EXACT:       return "Willingness-Exact"
@@ -920,8 +1035,10 @@ def run_optimizer(log_box):
         if sc >= W_FLIP:        return "Willingness-SessionFlip"
         if sc >= W_ADJ:         return "Willingness-±1Day"
         if sc >= W_ADJ2:        return "Willingness-±2Day"
+        if sc >= W_VAL_ADJ:     return "Willingness-ValAdj"
         return "OR-Assigned"
 
+    # ── Extract solution ──────────────────────────────────────────
     assigned = []
     if res.status in (0, 1):
         x = np.round(res.x).astype(int)
@@ -930,16 +1047,31 @@ def run_optimizer(log_box):
                 if x[v(fi, si)] == 1:
                     k  = (sl["date"], sl["session"], sl["type"])
                     sc = fexp[fn].get(k, 0)
-                    assigned.append({"Name": fn, "Date": sl["date"], "Session": sl["session"],
-                                     "Type": sl["type"], "Allocated_By": tag(fn, k, sc)})
+                    assigned.append({
+                        "Name": fn, "Date": sl["date"],
+                        "Session": sl["session"], "Type": sl["type"],
+                        "Allocated_By": tag(fn, k, sc)
+                    })
         method = "MILP Optimal (HiGHS)"
     else:
         log("  ⚠ MILP infeasible — greedy fallback...")
         method = "Greedy Fallback"
-        alloc_count = defaultdict(int); used_dt = defaultdict(set)
+        alloc_count = defaultdict(int)
+        used_dates  = defaultdict(set)
+
         def remaining(n): return DESIG_RULES[fac_d[n]][0] - alloc_count[n]
+
         def ok(n, dt_, tp_):
-            return tp_ in DESIG_RULES[fac_d[n]][2] and (dt_, tp_) not in used_dt[n] and remaining(n) > 0
+            val_days = fac_val_dates.get(n, set())
+            desig_   = fac_d[n]
+            return (
+                tp_ in DESIG_RULES[desig_][2]
+                and dt_ not in val_days
+                and dt_ not in used_dates[n]
+                and remaining(n) > 0
+                and not (dt_.weekday() == 5 and desig_ not in SAT_DESIG)
+            )
+
         for sl in sorted(ALL_S, key=lambda s: -s["required"]):
             d2, s2, r2, t2 = sl["date"], sl["session"], sl["required"], sl["type"]
             k = (d2, s2, t2)
@@ -947,7 +1079,8 @@ def run_optimizer(log_box):
                 [(n, fexp[n].get(k, 0)) for n in ALL_FAC if ok(n, d2, t2)],
                 key=lambda x: (-x[1], alloc_count[x[0]]))
             for fn, sc in candidates[:r2]:
-                alloc_count[fn] += 1; used_dt[fn].add((d2, t2))
+                alloc_count[fn] += 1
+                used_dates[fn].add(d2)
                 assigned.append({"Name": fn, "Date": d2, "Session": s2,
                                   "Type": t2, "Allocated_By": tag(fn, k, sc)})
         for fn in ALL_FAC:
@@ -956,7 +1089,8 @@ def run_optimizer(log_box):
                 if remaining(fn) <= 0: break
                 d2, s2, t2 = sl["date"], sl["session"], sl["type"]
                 if not ok(fn, d2, t2): continue
-                alloc_count[fn] += 1; used_dt[fn].add((d2, t2))
+                alloc_count[fn] += 1
+                used_dates[fn].add(d2)
                 assigned.append({"Name": fn, "Date": d2, "Session": s2,
                                   "Type": t2, "Allocated_By": "Gap-Fill"})
 
@@ -1039,8 +1173,9 @@ def run_optimizer(log_box):
     log(f"  ├─ Exact willingness       : {int((ab2 == 'Willingness-Exact').sum())}")
     log(f"  ├─ ACP offline→online      : {int((ab2 == 'Willingness-ACPOnline').sum())}")
     log(f"  ├─ Session flip FN↔AN      : {int((ab2 == 'Willingness-SessionFlip').sum())}")
-    log(f"  ├─ Adjacent day ±1         : {int((ab2 == 'Willingness-±1Day').sum())}")
-    log(f"  ├─ Adjacent day ±2         : {int((ab2 == 'Willingness-±2Day').sum())}")
+    log(f"  ├─ Adjacent day ±1 weekday : {int((ab2 == 'Willingness-±1Day').sum())}")
+    log(f"  ├─ Adjacent day ±2 weekday : {int((ab2 == 'Willingness-±2Day').sum())}")
+    log(f"  ├─ Valuation-adj bonus     : {int((ab2 == 'Willingness-ValAdj').sum())}")
     log(f"  └─ Auto-assigned           : {int(ab2.isin(['Auto-Assigned', 'OR-Assigned', 'Gap-Fill']).sum())}")
     log(f"\n  ★ Overall willingness match: {overall_match_pct:.1f}%  ({will_matched}/{will_total_sub})")
     log(f"  ★ Faculty ≥80% match       : {above80}/{len(sub_sumdf)}")
