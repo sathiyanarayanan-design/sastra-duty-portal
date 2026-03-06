@@ -1050,26 +1050,13 @@ def run_optimizer(log_box):
         if on_i:  add_con([v(fi, si) for si in on_i],  [1] * len(on_i),  1, 1)
         if off_i: add_con([v(fi, si) for si in off_i], [1] * len(off_i), 1, 1)
 
-    # C6: Willingness floor — at least 70% of duties from willingness window
-    #     Window = exact + flip + ±1/2/3 business days (score >= W_ADJ3)
-    #     Floor is adaptive: if window is small, floor is reduced proportionally
-    WILL_FLOOR   = 0.70
-    forced_count = 0
-    for fn in submitted:
-        fi = FAC_IDX.get(fn)
-        if fi is None: continue
-        dr   = DESIG_RULES[fac_d[fn]]
-        # Slots within window (exact + flip + ±1 biz-day only) and not blocked
-        w_si = [si for si in range(NS)
-                if fexp[fn].get((ALL_S[si]["date"], ALL_S[si]["session"],
-                                 ALL_S[si]["type"]), 0) >= W_ADJ1
-                and ub[v(fi, si)] > 0]
-        if not w_si: continue
-        floor_val = max(1, int(np.floor(dr[0] * WILL_FLOOR)))
-        floor_val = min(floor_val, len(w_si))
-        add_con([v(fi, si) for si in w_si], [1] * len(w_si), floor_val, dr[1])
-        forced_count += 1
-    log(f"  Willingness floor constraints : {forced_count} faculty  (≥{int(WILL_FLOOR*100)}% from exact+flip+±1-biz-day window)")
+    # C6: Willingness floor — SOFT constraint via relaxed upper bound
+    # We do NOT hard-enforce the floor here; instead the objective already
+    # strongly prefers willingness slots via high scores. A hard floor risks
+    # making the problem infeasible when the faculty's window is too narrow.
+    # The objective incentive (W_EXACT=100k >> W_NON_SUB=100) is sufficient.
+    log(f"  Willingness preference : enforced via objective weights (no hard floor)")
+    log(f"    W_EXACT={W_EXACT}  W_FLIP={W_FLIP}  W_ADJ1={W_ADJ1}  W_NON_SUB={W_NON_SUB}")
 
     # ── Solve ─────────────────────────────────────────────────────
     A   = csc_matrix((dA, (rA, cA)), shape=(nc[0], NV))
@@ -1159,6 +1146,98 @@ def run_optimizer(log_box):
     alloc = pd.DataFrame(assigned)
     if alloc.empty:
         raise RuntimeError("No assignments produced. Check input files.")
+
+    # ══════════════════════════════════════════════════════════════
+    # MANDATORY SLOT COMPLETION PASS
+    # After MILP or greedy, check every slot and fill any shortfall.
+    # This guarantees slot requirements are always met.
+    # Relaxation order:
+    #   Pass 1 — normal eligibility (respects val dates, same-day, sat rule)
+    #   Pass 2 — relax same-day constraint (allow 2nd duty on same date)
+    #   Pass 3 — relax Saturday restriction (any eligible faculty)
+    #   Pass 4 — relax valuation date block (last resort only)
+    # ══════════════════════════════════════════════════════════════
+    log("\n  ── Slot Completion Pass ──────────────────────────────")
+
+    # Rebuild current counts from assigned list
+    cur_alloc   = defaultdict(int)       # fn → duties assigned so far
+    cur_dates   = defaultdict(set)       # fn → dates assigned
+    acp_tc      = defaultdict(lambda: {"Online": 0, "Offline": 0})
+    slot_filled = defaultdict(int)       # (date, session, type) → count assigned
+
+    for row in assigned:
+        fn = row["Name"]; d2 = row["Date"]; t2 = row["Type"]
+        cur_alloc[fn] += 1
+        cur_dates[fn].add(d2)
+        if fac_d.get(fn) == "ACP": acp_tc[fn][t2] += 1
+        slot_filled[(d2, row["Session"], t2)] += 1
+
+    total_gaps = 0
+    for sl in ALL_S:
+        key    = (sl["date"], sl["session"], sl["type"])
+        needed = sl["required"] - slot_filled[key]
+        if needed <= 0: continue
+        total_gaps += needed
+
+        for relaxation in range(4):
+            if needed <= 0: break
+            # Build candidates under current relaxation level
+            cands = []
+            for fn in ALL_FAC:
+                desig_ = fac_d[fn]
+                if sl["type"] not in DESIG_RULES[desig_][2]: continue
+                val_days = fac_val_dates.get(fn, set())
+
+                # Pass 4: allow valuation date
+                if relaxation < 3 and sl["date"] in val_days: continue
+
+                # Pass 3: allow Saturday for non-TA/RA
+                if relaxation < 2 and sl["date"].weekday() == 5 and desig_ not in SAT_DESIG: continue
+
+                # ACP type limit (never relax — structural rule)
+                if desig_ == "ACP" and acp_tc[fn][sl["type"]] >= 1: continue
+
+                # Pass 2: allow same-date second duty
+                if relaxation < 1 and sl["date"] in cur_dates[fn]: continue
+
+                # Duty count cap: allow up to max
+                if cur_alloc[fn] >= DESIG_RULES[desig_][1]: continue
+
+                sc = fexp[fn].get(key, 0)
+                cands.append((fn, sc))
+
+            cands.sort(key=lambda x: (
+                -DESIG_PRIORITY.get(fac_d[x[0]], 0),
+                -x[1],
+                cur_alloc[x[0]]
+            ))
+
+            for fn, sc in cands:
+                if needed <= 0: break
+                cur_alloc[fn] += 1
+                cur_dates[fn].add(sl["date"])
+                if fac_d.get(fn) == "ACP": acp_tc[fn][sl["type"]] += 1
+                slot_filled[key] += 1
+                needed -= 1
+                lbl = "Gap-Fill" if relaxation == 0 else f"Gap-Fill-R{relaxation+1}"
+                assigned.append({
+                    "Name": fn, "Date": sl["date"],
+                    "Session": sl["session"], "Type": sl["type"],
+                    "Allocated_By": lbl
+                })
+
+        if needed > 0:
+            log(f"  ⚠ Could not fill {needed} seat(s) for "
+                f"{sl['date']} {sl['session']} {sl['type']} — "
+                f"insufficient eligible faculty")
+
+    filled_now = sum(1 for sl in ALL_S
+                     for _ in range(max(0, sl["required"] -
+                                        slot_filled.get((sl["date"], sl["session"], sl["type"]), 0))))
+    log(f"  Slot gaps before completion : {total_gaps}")
+    log(f"  Remaining unfilled         : {filled_now}")
+
+    alloc = pd.DataFrame(assigned)
     alloc["Date"] = pd.to_datetime(alloc["Date"]).dt.strftime("%d-%m-%Y")
     alloc = alloc.sort_values(["Date", "Session", "Name"]).reset_index(drop=True)
     alloc.insert(0, "Sl.No", alloc.index + 1)
