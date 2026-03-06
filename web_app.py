@@ -80,8 +80,7 @@ DUTY_STRUCTURE = {"P": 3, "ACP": 5, "SAP": 7, "AP3": 7, "AP2": 7, "TA": 9, "RA":
 W_EXACT      = 100_000   # exact date + session match
 W_ACP_ONLINE =  80_000   # ACP offline→online mapping
 W_FLIP       =  60_000   # same date, opposite session (FN↔AN)
-W_ADJ        =  40_000   # ±1 weekday adjacency
-W_ADJ2       =  20_000   # ±2 weekday adjacency
+W_ADJ1       =  40_000   # ±1 business day adjacency
 W_VAL_ADJ    =   5_000   # adjacent to own valuation date
 W_NON_SUB    =     100   # no willingness submitted
 PENALTY      =      10   # submitted but slot outside window (discourage)
@@ -919,7 +918,6 @@ def run_optimizer(log_box):
                     set_score(fexp[n], (adj, s2, tp), W_ADJ1)
 
     # Valuation-adjacent bonus: day before/after each val date
-    W_VAL_ADJ = 5_000
     for n in ALL_FAC:
         allowed = DESIG_RULES[fac_d.get(n, "TA")][2]
         for vd in fac_val_dates.get(n, set()):
