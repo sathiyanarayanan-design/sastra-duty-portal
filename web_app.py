@@ -282,10 +282,22 @@ def load_slots(off_path, on_path):
 #               WILLINGNESS FILE FUNCTIONS                       #
 # ═══════════════════════════════════════════════════════════════ #
 def load_willingness():
-    if not os.path.exists(WILLINGNESS_FILE):
-        return pd.DataFrame(columns=["Faculty", "Date", "Session", "FacultyClean"])
+    # Priority: admin-uploaded file in session state → file on disk
+    uploaded_bytes = st.session_state.get("uploaded_willingness_bytes", None)
+    source = None
+    if uploaded_bytes is not None:
+        try:
+            import io
+            source = io.BytesIO(uploaded_bytes)
+        except Exception:
+            source = None
+    if source is None:
+        if not os.path.exists(WILLINGNESS_FILE):
+            return pd.DataFrame(columns=["Faculty", "Date", "Session", "FacultyClean"])
+        source = WILLINGNESS_FILE
+
     try:
-        xl = pd.ExcelFile(WILLINGNESS_FILE)
+        xl = pd.ExcelFile(source)
         df = None
         for sh in xl.sheet_names:
             c = xl.parse(sh)
@@ -1541,28 +1553,55 @@ if panel_mode == "Admin View":
         # ── Tab 1: Willingness Records ────────────────────────────
         with t1:
             st.markdown("### Willingness Records")
+
+            # ── Upload willingness file ───────────────────────────
+            st.markdown("#### 📤 Upload Willingness File")
+            up_src = "uploaded" if st.session_state.get("uploaded_willingness_bytes") else "disk"
+            if up_src == "uploaded":
+                st.success("✅ Willingness file uploaded by admin — ready for optimizer.")
+            elif os.path.exists(WILLINGNESS_FILE):
+                st.info("ℹ️ Using Willingness.xlsx from repository. Upload a file below to override.")
+            else:
+                st.warning("⚠ No willingness file found. Please upload below.")
+
+            uploaded_will = st.file_uploader(
+                "Upload Willingness.xlsx",
+                type=["xlsx", "xls"],
+                key="will_uploader",
+                help="Upload the faculty willingness Excel file collected externally or exported from this portal."
+            )
+            if uploaded_will is not None:
+                st.session_state["uploaded_willingness_bytes"] = uploaded_will.read()
+                st.success(f"✅ '{uploaded_will.name}' uploaded successfully. Reload the tab to see updated records.")
+                st.rerun()
+
+            if st.session_state.get("uploaded_willingness_bytes"):
+                if st.button("🗑 Remove Uploaded File (revert to repository file)", type="secondary"):
+                    del st.session_state["uploaded_willingness_bytes"]
+                    st.rerun()
+
+            st.markdown("---")
+
+            # ── Display records ───────────────────────────────────
+            st.markdown("#### 📋 Current Willingness Data")
             w_all = get_all_willingness()
             if w_all.empty:
-                st.info(
-                    "No willingness data found.\n\n"
-                    "**Workflow:** Faculty submit via User View → "
-                    "Download CSV → Save as Willingness.xlsx → Upload to GitHub → Run Optimizer.")
+                st.info("No willingness data found. Upload a file above.")
             else:
                 vdf = w_all.drop(columns=["FacultyClean"], errors="ignore").reset_index(drop=True)
                 if "Sl.No" not in vdf.columns:
                     vdf.insert(0, "Sl.No", vdf.index + 1)
-                sub_cnt = vdf["Faculty"].nunique() if "Faculty" in vdf.columns else 0
+                sub_cnt_val = vdf["Faculty"].nunique() if "Faculty" in vdf.columns else 0
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Faculty Submitted", sub_cnt)
-                c2.metric("Not Yet Submitted", len(fac_df) - sub_cnt)
-                c3.metric("Total Rows",         len(vdf))
+                c1.metric("Faculty Submitted",  sub_cnt_val)
+                c2.metric("Not Yet Submitted",  len(fac_df) - sub_cnt_val)
+                c3.metric("Total Rows",          len(vdf))
                 st.dataframe(vdf, use_container_width=True, hide_index=True)
                 st.download_button(
-                    "⬇ Download Willingness CSV",
+                    "⬇ Download as CSV",
                     data=vdf[["Faculty", "Date", "Session"]].to_csv(index=False).encode("utf-8"),
-                    file_name="Willingness.csv", mime="text/csv",
-                    help="Download → open in Excel → Save As Willingness.xlsx → upload to GitHub")
-                st.caption("📌 Download CSV → save as Willingness.xlsx → upload to GitHub → run optimizer.")
+                    file_name="Willingness.csv", mime="text/csv")
+
             st.markdown("---")
             st.markdown("#### ⚠ Clear In-Session Submissions")
             st.checkbox("Confirm clearing all in-session submissions", key="confirm_delete")
@@ -1579,7 +1618,12 @@ if panel_mode == "Admin View":
         with t2:
             st.markdown("### Run Allocation Optimizer")
             def fstat(f): return "✅ Found" if os.path.exists(f) else "❌ Missing"
-            wstat = "✅ Found" if os.path.exists(WILLINGNESS_FILE) else "⚠ Not found (all auto-assigned)"
+            if st.session_state.get("uploaded_willingness_bytes"):
+                wstat = "✅ Uploaded by admin"
+            elif os.path.exists(WILLINGNESS_FILE):
+                wstat = "✅ Found (repository)"
+            else:
+                wstat = "⚠ Not found (all auto-assigned)"
             st.markdown(f"""
 | File | Purpose | Status |
 |---|---|---|
