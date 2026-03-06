@@ -946,9 +946,7 @@ def run_optimizer(log_box):
     model = cp_model.CpModel()
 
     # Boolean variable x[(fi,si)] = 1 if faculty fi assigned to slot si.
-    # Variables are only created for feasible (faculty, slot) pairs —
-    # impossible pairs (wrong type, val date, Sat rule) are never added,
-    # which keeps the model small and fast.
+    # Variables only created for valid pairs — blocked pairs never added.
     x              = {}
     feasible_pairs = []   # (fi, fn, si, sl)
 
@@ -958,11 +956,11 @@ def run_optimizer(log_box):
         allowed  = DESIG_RULES[desig][2]
         val_days = fac_val_dates.get(fn, set())
         for si, sl in enumerate(ALL_S):
-            if sl["date"] in val_days:
-                val_blocked += 1
-                continue
             if sl["type"] not in allowed:
                 type_blocked += 1
+                continue
+            if sl["date"] in val_days:
+                val_blocked += 1
                 continue
             if sl["date"].weekday() == 5 and desig not in SAT_DESIG:
                 sat_blocked += 1
@@ -974,21 +972,22 @@ def run_optimizer(log_box):
         f"{sat_blocked} saturday | {type_blocked} wrong-type")
     log(f"  Decision variables : {len(x)}")
 
-    # Index for fast lookups
-    slots_for_fac  = defaultdict(list)   # fi → [(si, sl, var), ...]
-    facs_for_slot  = defaultdict(list)   # si → [(fi, fn, var), ...]
+    # Check and warn for any slot still under-staffed after normal blocking
+    slots_for_fac  = defaultdict(list)
+    facs_for_slot  = defaultdict(list)
     for fi, fn, si, sl in feasible_pairs:
         slots_for_fac[fi].append((si, sl, x[(fi, si)]))
         facs_for_slot[si].append((fi, fn, x[(fi, si)]))
 
-    # ── C1: Every seat in every slot MUST be filled (hard) ────────
-    unfillable = 0
     for si, sl in enumerate(ALL_S):
         fac_vars = [var for fi, fn, var in facs_for_slot[si]]
         if len(fac_vars) < sl["required"]:
-            log(f"  ⚠ Slot {sl['date']} {sl['session']} {sl['type']}: "
-                f"only {len(fac_vars)} eligible faculty for {sl['required']} seats!")
-            unfillable += sl["required"] - len(fac_vars)
+            log(f"  ⚠ {sl['date']} {sl['session']} {sl['type']}: "
+                f"{len(fac_vars)} eligible faculty for {sl['required']} seats")
+
+    # ── C1: Every seat in every slot MUST be filled (hard) ────────
+    for si, sl in enumerate(ALL_S):
+        fac_vars = [var for fi, fn, var in facs_for_slot[si]]
         if fac_vars:
             model.Add(sum(fac_vars) == sl["required"])
 
@@ -1015,13 +1014,63 @@ def run_optimizer(log_box):
         if on_vars:
             model.Add(sum(on_vars) == 1)
 
-    # ── C5: ACP — exactly 1 online AND exactly 1 offline ──────────
-    for fn in dgroups.get("ACP", []):
+    # ── C5: ACP — cadre-position-based online/offline split ───────
+    # Count how many online seats across all online slots need to be
+    # covered by ACP faculty (only ACP + P do online; P gets exactly 1).
+    # Allocate from the TOP of the ACP cadre list:
+    #   • First group  → 2 Online + 0 Offline  (to fill online shortfall)
+    #   • Middle group → 1 Online + 1 Offline  (standard)
+    #   • Last group   → 0 Online + 2 Offline  (adjustment / makeup)
+    # Last-2 ACP take 2 offline to compensate the first group's extra online.
+    acp_list    = dgroups.get("ACP", [])   # ordered as they appear in Faculty_Master
+    n_acp       = len(acp_list)
+    total_online_seats  = sum(sl["required"] for sl in ALL_S if sl["type"] == "Online")
+    p_online_count      = len(dgroups.get("P", []))   # each P takes exactly 1 online
+    acp_online_needed   = max(0, total_online_seats - p_online_count)
+    # How many ACP need 2 online to cover the demand?
+    # Standard allocation: each ACP covers 1 online → covers n_acp online slots
+    # Extra online needed beyond standard:
+    extra_online = max(0, acp_online_needed - n_acp)
+    n_double_online = min(extra_online, n_acp)      # first N ACPs get 2 online
+    n_double_offline = n_double_online               # last N ACPs get 2 offline to balance
+    n_double_offline = min(n_double_offline, n_acp - n_double_online)
+
+    log(f"\n  ACP cadre split    : {n_acp} total | "
+        f"{n_double_online} get 2-online | "
+        f"{n_acp - n_double_online - n_double_offline} get 1+1 | "
+        f"{n_double_offline} get 2-offline")
+
+    # Per-ACP type limits (used in C5, greedy fallback, and completion pass)
+    acp_online_limit  = {}
+    acp_offline_limit = {}
+    for idx, fn2 in enumerate(acp_list):
+        if idx < n_double_online:
+            acp_online_limit[fn2]  = 2
+            acp_offline_limit[fn2] = 0
+        elif idx >= n_acp - n_double_offline and n_double_offline > 0:
+            acp_online_limit[fn2]  = 0
+            acp_offline_limit[fn2] = 2
+        else:
+            acp_online_limit[fn2]  = 1
+            acp_offline_limit[fn2] = 1
+
+    for idx, fn in enumerate(acp_list):
         fi       = FAC_IDX[fn]
         on_vars  = [var for si, sl, var in slots_for_fac[fi] if sl["type"] == "Online"]
         off_vars = [var for si, sl, var in slots_for_fac[fi] if sl["type"] == "Offline"]
-        if on_vars:  model.Add(sum(on_vars)  == 1)
-        if off_vars: model.Add(sum(off_vars) == 1)
+
+        if idx < n_double_online:
+            # First group: 2 online, 0 offline
+            if on_vars:  model.Add(sum(on_vars)  == 2)
+            if off_vars: model.Add(sum(off_vars) == 0)
+        elif idx >= n_acp - n_double_offline and n_double_offline > 0:
+            # Last group: 0 online, 2 offline
+            if on_vars:  model.Add(sum(on_vars)  == 0)
+            if off_vars: model.Add(sum(off_vars) == 2)
+        else:
+            # Standard: exactly 1 online + exactly 1 offline
+            if on_vars:  model.Add(sum(on_vars)  == 1)
+            if off_vars: model.Add(sum(off_vars) == 1)
 
     # ── Objective: maximise (seniority priority + willingness score) ─
     # Both are plain integers so no scaling needed.
@@ -1093,7 +1142,9 @@ def run_optimizer(log_box):
             if dt_ in used_dates[n]:                                  return False
             if remaining(n) <= 0:                                     return False
             if dt_.weekday() == 5 and desig_ not in SAT_DESIG:       return False
-            if desig_ == "ACP" and acp_type_count[n][tp_] >= 1:      return False
+            if desig_ == "ACP":
+                if tp_ == "Online"  and acp_type_count[n]["Online"]  >= acp_online_limit.get(n, 1):  return False
+                if tp_ == "Offline" and acp_type_count[n]["Offline"] >= acp_offline_limit.get(n, 1): return False
             return True
 
         for sl in sorted(ALL_S, key=lambda s: -s["required"]):
@@ -1178,8 +1229,11 @@ def run_optimizer(log_box):
                     continue
                 if relax < 2 and sl["date"].weekday() == 5 and desig_ not in SAT_DESIG:
                     continue
-                if desig_ == "ACP" and acp_tc[fn][sl["type"]] >= 1:
-                    continue
+                if desig_ == "ACP":
+                    lim_on  = acp_online_limit.get(fn, 1)
+                    lim_off = acp_offline_limit.get(fn, 1)
+                    if sl["type"] == "Online"  and acp_tc[fn]["Online"]  >= lim_on:  continue
+                    if sl["type"] == "Offline" and acp_tc[fn]["Offline"] >= lim_off: continue
                 if relax < 1 and sl["date"] in cur_dates[fn]:
                     continue
                 if cur_alloc[fn] >= DESIG_RULES[desig_][1]:
