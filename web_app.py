@@ -619,23 +619,39 @@ def render_calendar(duty_df, val_dates, title):
         frame = calendar_frame(duty_df, set(val_dates), yr, mo)
         st.markdown(f"**{calmod.month_name[mo]} {yr}**")
 
-        # Add a "WeekSession" column: e.g. "W1-FN", "W1-AN" for x-axis
-        frame["WeekSession"] = "W" + frame["Week"].astype(str) + "-" + frame["Session"]
+        # ── Shared FN | AN header ABOVE the chart ─────────────────
+        st.markdown(
+            "<div style='display:flex;justify-content:flex-end;"
+            "gap:6px;margin-bottom:2px;padding-right:4px'>"
+            "<span style='font-size:.8rem;font-weight:700;color:#0b3a67;"
+            "background:#dbeafe;border-radius:4px;padding:2px 10px'>FN &nbsp;|&nbsp; AN</span>"
+            "<span style='font-size:.78rem;color:#64748b;padding:2px 4px'>"
+            "← each cell: left = FN, right = AN</span>"
+            "</div>",
+            unsafe_allow_html=True
+        )
 
-        # Build ordered x-axis: W1-FN, W1-AN, W2-FN, W2-AN, ...
-        weeks_sorted = sorted(frame["Week"].unique())
-        x_order = [f"W{w}-{s}" for w in weeks_sorted for s in ["FN", "AN"]]
+        # Pivot: one row per (Week, Weekday), separate cols for FN and AN
+        fn_frame = frame[frame["Session"] == "FN"][
+            ["Week", "Weekday", "DayNum", "DateLabel", "Required", "Category"]
+        ].rename(columns={
+            "Required": "FN_Required", "Category": "FN_Category", "DateLabel": "FN_DateLabel"
+        })
+        an_frame = frame[frame["Session"] == "AN"][
+            ["Week", "Weekday", "Required", "Category", "DateLabel"]
+        ].rename(columns={
+            "Required": "AN_Required", "Category": "AN_Category", "DateLabel": "AN_DateLabel"
+        })
+        merged = fn_frame.merge(an_frame, on=["Week", "Weekday"], how="left")
 
+        # Melt back for Altair — keep date shown once, session as xOffset
         base = alt.Chart(frame).encode(
-            x=alt.X("WeekSession:N", sort=x_order,
-                    axis=alt.Axis(
-                        title=None,
-                        labels=False,   # hide individual W1-FN labels; we add custom header
-                        ticks=False,
-                        grid=False
-                    )),
-            y=alt.Y("Weekday:N", sort=WD_ORDER,
-                    axis=alt.Axis(title=None, labelFontSize=12)),
+            x=alt.X("Weekday:N", sort=WD_ORDER,
+                    axis=alt.Axis(title=None, labelFontSize=12, orient="top",
+                                  ticks=False, domain=False, labelPadding=6)),
+            xOffset=alt.XOffset("Session:N", sort=["FN", "AN"]),
+            y=alt.Y("Week:O", sort="ascending",
+                    axis=alt.Axis(title=None, labels=False, ticks=False, domain=False)),
             tooltip=[
                 alt.Tooltip("DateLabel:N", title="Date"),
                 alt.Tooltip("Session:N",   title="Session"),
@@ -645,20 +661,12 @@ def render_calendar(duty_df, val_dates, title):
         )
 
         rect = base.mark_rect(stroke="white", strokeWidth=1).encode(
-            color=alt.Color("Category:N", scale=cscale,
-                            legend=alt.Legend(title="Legend"))
+            color=alt.Color("Category:N", scale=cscale, legend=alt.Legend(title="Legend"))
         )
 
-        # Day-of-month number in each cell
-        day_num_text = base.mark_text(
-            color="black", fontSize=9, fontWeight="normal", dy=-7
-        ).encode(
-            text=alt.Text("DayNum:Q")
-        )
-
-        # Required count — shown only when > 0
-        duty_count_text = base.mark_text(
-            color="black", fontSize=12, fontWeight="bold", dy=6
+        # Duty count centred in each half-cell (only when > 0)
+        duty_text = base.mark_text(
+            color="black", fontSize=12, fontWeight="bold"
         ).encode(
             text=alt.condition(
                 alt.datum.Required > 0,
@@ -667,26 +675,22 @@ def render_calendar(duty_df, val_dates, title):
             )
         )
 
-        chart = (rect + day_num_text + duty_count_text).properties(height=220)
-        st.altair_chart(chart, use_container_width=True)
+        # Day-of-month — only on FN half, small, top of cell
+        day_text = (
+            alt.Chart(frame[frame["Session"] == "FN"])
+            .mark_text(color="#1e293b", fontSize=9, dy=-10, dx=-2)
+            .encode(
+                x=alt.X("Weekday:N", sort=WD_ORDER),
+                y=alt.Y("Week:O", sort="ascending"),
+                text=alt.Text("DayNum:Q")
+            )
+        )
 
-        # ── Custom FN / AN header rendered via markdown ──────────
-        n_weeks = len(weeks_sorted)
-        fn_an_cols = st.columns(n_weeks)
-        for i, w in enumerate(weeks_sorted):
-            with fn_an_cols[i]:
-                st.markdown(
-                    f"<div style='display:flex;gap:2px;justify-content:center'>"
-                    f"<span style='flex:1;text-align:center;font-size:.75rem;"
-                    f"font-weight:700;color:#0b3a67;background:#e0e7ef;"
-                    f"border-radius:4px;padding:1px 0'>FN</span>"
-                    f"<span style='flex:1;text-align:center;font-size:.75rem;"
-                    f"font-weight:700;color:#0b3a67;background:#e0e7ef;"
-                    f"border-radius:4px;padding:1px 0'>AN</span>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-        st.caption("Numbers inside cells = duties required")
+        st.altair_chart(
+            (rect + duty_text + day_text).properties(height=200),
+            use_container_width=True
+        )
+        st.caption("Numbers = duties required  |  Left half of cell = FN, Right half = AN")
 
 
 # ═══════════════════════════════════════════════════════════════ #
