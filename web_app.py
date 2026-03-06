@@ -1658,7 +1658,7 @@ if user_mode == "Allotment":
     st.markdown(
         "<div style='margin-top:10px;padding:10px 14px;background:#f1f5f9;"
         "border-radius:8px;border:1px solid #cbd5e1;font-size:.82rem;color:#475569'>"
-        "📩 For any specific support, "
+        "📩 For any specific support or clarification regarding your duty allotment, "
         "please contact the <strong>University Examination Committee, "
         "School of Mechanical Engineering (SoME)</strong>."
         "</div>",
@@ -1669,19 +1669,21 @@ if user_mode == "Allotment":
     msg = build_msg(sn, wdisp, vd, idisp, qd)
     st.markdown('<div class="panel"><div class="sec-title">📲 Share via WhatsApp</div></div>',
                 unsafe_allow_html=True)
+
+    st.markdown("**Message Preview:**")
+    st.code(msg, language="text")
+
     wph = st.text_input("WhatsApp Number (with country code)", placeholder="+919876543210")
-    if st.button("Generate WhatsApp Link", use_container_width=True):
-        if not wph.strip():
-            st.warning("Enter a number.")
-        else:
-            lnk = wa_link(wph.strip(), msg)
-            st.markdown(
-                f'<a href="{lnk}" target="_blank" style="display:inline-block;'
-                f'background:#25D366;color:white;padding:10px 22px;border-radius:10px;'
-                f'font-weight:700;text-decoration:none;">📲 Open WhatsApp & Send</a>',
-                unsafe_allow_html=True)
-    with st.expander("Preview Message"):
-        st.code(msg, language="text")
+    if wph.strip():
+        lnk = wa_link(wph.strip(), msg)
+        st.markdown(
+            f'<a href="{lnk}" target="_blank" style="display:inline-block;'
+            f'background:#25D366;color:white;padding:10px 22px;border-radius:10px;'
+            f'font-weight:700;text-decoration:none;margin-top:6px">'
+            f'📲 Open WhatsApp &amp; Send</a>',
+            unsafe_allow_html=True)
+    else:
+        st.caption("Enter your WhatsApp number above to generate the send link.")
 
     st.markdown("---")
     st.caption("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
@@ -1888,4 +1890,3 @@ with right:
 
 st.markdown("---")
 st.caption("Curated by Dr. N. Sathiya Narayanan | School of Mechanical Engineering")
-
