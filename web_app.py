@@ -61,18 +61,33 @@ DESIG_RULES = {
 }
 DUTY_STRUCTURE = {"P": 3, "ACP": 5, "SAP": 7, "AP3": 7, "AP2": 7, "TA": 9, "RA": 9}
 
-W_EXACT      = 10000
-W_ACP_ONLINE =  8000
-W_FLIP       =  3000
-W_ADJ2       =  1500
-W_ADJ        =  2000
-W_NON_SUB    =    10
-PENALTY      =     1
+# ── Willingness match scores ──────────────────────────────────── #
+W_EXACT      = 100_000   # exact date + session match
+W_ACP_ONLINE =  80_000   # ACP offline→online mapping
+W_FLIP       =  60_000   # same date, opposite session (FN↔AN)
+W_ADJ        =  40_000   # ±1 weekday adjacency
+W_ADJ2       =  20_000   # ±2 weekday adjacency
+W_VAL_ADJ    =   5_000   # adjacent to own valuation date
+W_NON_SUB    =     100   # no willingness submitted
+PENALTY      =      10   # submitted but slot outside window (discourage)
+
+# ── Designation priority (higher = preferred for slot filling) ── #
+# P > ACP > SAP = AP3 = AP2 >> TA = RA
+# TA and RA are last resort; senior faculty fill slots first
+DESIG_PRIORITY = {
+    "P":   6_000_000,
+    "ACP": 5_000_000,
+    "SAP": 4_000_000,
+    "AP3": 3_000_000,
+    "AP2": 2_000_000,
+    "TA":        0,    # TA/RA get no priority bonus — used as fill-in only
+    "RA":        0,
+}
 
 WILL_TAGS = {
     "Willingness-Exact", "Willingness-ACPOnline",
     "Willingness-SessionFlip", "Willingness-±1Day", "Willingness-±2Day",
-    "Willingness-ValAdj"
+    "Willingness-±3Day", "Willingness-ValAdj"
 }
 
 # ─── Page config ─────────────────────────────────────────────── #
@@ -384,21 +399,22 @@ def classify_duty(alloc_by: str, duty_date, duty_sess: str, will_set: set):
                 f"You submitted {duty_date.strftime('%d-%m-%Y')} {opp} → allotted {duty_sess} "
                 f"(same date, session swapped)", True)
 
-    if ab in ("Willingness-±1Day", "Willingness-±2Day"):
-        window = "±1 day" if "1Day" in ab else "±2 days"
+    if ab in ("Willingness-±1Day", "Willingness-±2Day", "Willingness-±3Day"):
+        days_n = "1" if "1Day" in ab else ("2" if "2Day" in ab else "3")
+        window = f"±{days_n} biz-day{'s' if days_n != '1' else ''}"
         closest = ""
-        deltas  = [-1, 1] if "1Day" in ab else [-2, -1, 1, 2]
-        for delta in deltas:
-            adj = duty_date + datetime.timedelta(days=delta)
-            for s in ["FN", "AN"]:
-                if (adj, s) in will_set:
-                    direction = "after" if delta > 0 else "before"
-                    closest = (f"You submitted {adj.strftime('%d-%m-%Y')} {s} "
-                                f"→ duty shifted {abs(delta)} weekday(s) {direction} "
-                                f"to {duty_date.strftime('%d-%m-%Y')} {duty_sess}")
-                    break
-            if closest:
-                break
+        for bd in [1, 2, 3]:
+            for direction in [1, -1]:
+                adj = duty_date + datetime.timedelta(days=bd * direction)
+                for s in ["FN", "AN"]:
+                    if (adj, s) in will_set:
+                        direction_lbl = "after" if direction > 0 else "before"
+                        closest = (f"You submitted {adj.strftime('%d-%m-%Y')} {s} "
+                                   f"→ duty shifted {bd} biz-day(s) {direction_lbl} "
+                                   f"to {duty_date.strftime('%d-%m-%Y')} {duty_sess}")
+                        break
+                if closest: break
+            if closest: break
         return (f"Date Adjusted ({window})", "📅",
                 closest or f"Allotted within {window} of your submitted willingness", True)
 
@@ -544,7 +560,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Category": [
             "✅ Exact Match",
             "🔄 Session Adjusted (FN↔AN, same date)",
-            "📅 Date Adjusted (±1 or ±2 weekdays)",
+            "📅 Date Adjusted (±1/2/3 biz-days)",
             "🗓️ Valuation-Adjacent (day before/after val date)",
             "🔴 Not in Willingness / Auto-Assigned",
         ],
@@ -559,7 +575,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Meaning": [
             "Allotted on the exact date & session you submitted",
             "Same date, but morning/afternoon slot was swapped",
-            "Duty shifted 1 or 2 weekdays from your submitted date",
+            "Duty shifted 1, 2, or 3 business days from your submitted date",
             "Allotted on a weekday adjacent to your valuation date",
             "No matching date — system assigned to fill slot",
         ],
@@ -572,7 +588,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
     else:
         if n_exact   > 0: dev_lines.append(f"  ✅ Exact match          : {n_exact} duty(ies)")
         if n_sess    > 0: dev_lines.append(f"  🔄 Session swapped      : {n_sess} duty(ies) (FN↔AN, same date)")
-        if n_adj     > 0: dev_lines.append(f"  📅 Date shifted         : {n_adj} duty(ies) (±1 or ±2 weekdays)")
+        if n_adj     > 0: dev_lines.append(f"  📅 Date shifted         : {n_adj} duty(ies) (±1/2/3 biz-days)")
         if n_valadj  > 0: dev_lines.append(f"  🗓️ Valuation-adjacent   : {n_valadj} duty(ies) (day before/after val date)")
         if n_no      > 0: dev_lines.append(f"  🔴 System-assigned      : {n_no} duty(ies) (outside willingness window)")
 
@@ -769,7 +785,7 @@ def run_optimizer(log_box):
 
     log("=" * 62)
     log("  SASTRA SoME Duty Optimizer  (HiGHS MILP  –  v4)")
-    log("  Rules: val-safe | session-flip | weekday-adj | Sat→TA/RA")
+    log("  Rules: val-safe | session-flip | weekday-adj | Sat→TA/RA | seniority-priority")
     log("=" * 62)
 
     # ── Load faculty ──────────────────────────────────────────────
@@ -835,24 +851,45 @@ def run_optimizer(log_box):
     sat_si    = [i for i, s in enumerate(ALL_S) if s["date"].weekday() == 5]
     log(f"  Saturday slots     : {len(sat_si)}  (restricted to TA/RA only)")
 
-    # ── Helper: is a date a weekend? ─────────────────────────────
-    def is_weekend(d): return d.weekday() >= 5   # 5=Sat, 6=Sun
+    # ── Helpers ───────────────────────────────────────────────────
+    def is_weekend(d): return d.weekday() >= 5
+
+    def next_weekday(d, steps):
+        """Walk exactly |steps| business days forward (steps>0) or back (steps<0)."""
+        step = 1 if steps > 0 else -1
+        cur  = d
+        count = 0
+        while count < abs(steps):
+            cur += datetime.timedelta(days=step)
+            if not is_weekend(cur):
+                count += 1
+        return cur
+
+    # ── All exam slot dates as a set (for quick lookup) ──────────
+    slot_dates = {s["date"] for s in ALL_S}
 
     # ══════════════════════════════════════════════════════════════
-    #   SCORE MATRIX  — fexp[faculty][(date, session, type)] = score
-    #   Scoring hierarchy (higher = stronger preference to assign):
-    #     W_EXACT      = exact date + exact session submitted
-    #     W_ACP_ONLINE = ACP offline-date mapped to online slot
-    #     W_FLIP       = same date, opposite session (FN↔AN)      [Rule 1]
-    #     W_ADJ        = ±1 weekday from submitted date            [Rule 2]
-    #     W_ADJ2       = ±2 weekdays from submitted date           [Rule 2]
-    #     W_VAL_ADJ    = adjacent to faculty's own valuation date  [Rule 4]
-    #     W_NON_SUB    = no willingness submitted — any slot OK
+    #   SCORE MATRIX  fexp[faculty][(date, session, type)] = score
+    #
+    #   W_EXACT      exact date + exact session
+    #   W_ACP_ONLINE ACP offline-date → online slot
+    #   W_FLIP       same date, opposite session (FN↔AN)
+    #   W_ADJ1       ±1 business day
+    #   W_ADJ2       ±2 business days
+    #   W_ADJ3       ±3 business days
+    #   W_VAL_ADJ    adjacent to own valuation date
+    #   W_NON_SUB    no willingness submitted
     # ══════════════════════════════════════════════════════════════
-    W_VAL_ADJ = 500   # bonus for slot adjacent to faculty's own valuation date
+    W_ADJ1    = 40_000
+    W_ADJ2    = 20_000
+    W_ADJ3    = 10_000
+    W_VAL_ADJ =  5_000
 
     fexp = defaultdict(dict)
     def set_score(d, k, val): d[k] = max(d.get(k, 0), val)
+
+    # Build a set of all willingness (date, session) per faculty for fast lookup
+    fac_will_set = defaultdict(set)
 
     for _, row in wdf.iterrows():
         n    = str(row.get("Faculty", "")).strip()
@@ -860,8 +897,9 @@ def run_optimizer(log_box):
         dt2  = row["Date"].date()
         sess = str(row["Session"]).strip().upper()
         opp  = "AN" if sess == "FN" else "FN"
-        allowed   = DESIG_RULES[fac_d.get(n, "TA")][2]
-        val_days  = fac_val_dates.get(n, set())
+        allowed = DESIG_RULES[fac_d.get(n, "TA")][2]
+
+        fac_will_set[n].add((dt2, sess))
 
         # Exact match
         for tp in allowed:
@@ -876,39 +914,32 @@ def run_optimizer(log_box):
         for tp in allowed:
             set_score(fexp[n], (dt2, opp, tp), W_FLIP)
 
-        # Rule 2: ±1 weekday (skip Sat/Sun)
-        for delta in [-1, +1]:
-            adj = dt2 + datetime.timedelta(days=delta)
-            if is_weekend(adj): continue          # skip weekends
-            for s2 in ["FN", "AN"]:
-                for tp in allowed:
-                    set_score(fexp[n], (adj, s2, tp), W_ADJ)
+        # Rule 2: ±1, ±2, ±3 business days — only on actual exam slot dates
+        for bdays, score in [(1, W_ADJ1), (2, W_ADJ2), (3, W_ADJ3)]:
+            for direction in [+1, -1]:
+                adj = next_weekday(dt2, bdays * direction)
+                if adj not in slot_dates:
+                    continue          # only score if exam actually exists that day
+                for s2 in ["FN", "AN"]:
+                    for tp in allowed:
+                        set_score(fexp[n], (adj, s2, tp), score)
 
-        # Rule 2: ±2 weekday (skip Sat/Sun)
-        for delta in [-2, +2]:
-            adj = dt2 + datetime.timedelta(days=delta)
-            if is_weekend(adj): continue
-            for s2 in ["FN", "AN"]:
-                for tp in allowed:
-                    set_score(fexp[n], (adj, s2, tp), W_ADJ2)
-
-    # Rule 4: bonus score for slots that are ±1 day adjacent to the
-    #         faculty's own valuation date (helps fill those boundary slots)
+    # Rule 4: bonus for slots adjacent to faculty's own valuation date
     for n in ALL_FAC:
         allowed  = DESIG_RULES[fac_d.get(n, "TA")][2]
         val_days = fac_val_dates.get(n, set())
         for vd in val_days:
-            for delta in [-1, +1]:
-                adj = vd + datetime.timedelta(days=delta)
-                if is_weekend(adj): continue
-                for s2 in ["FN", "AN"]:
-                    for tp in allowed:
-                        k = (adj, s2, tp)
-                        # Only add if not already scored higher
-                        if fexp[n].get(k, 0) < W_VAL_ADJ:
-                            set_score(fexp[n], k, W_VAL_ADJ)
+            for bdays in [1, 2]:
+                for direction in [+1, -1]:
+                    adj = next_weekday(vd, bdays * direction)
+                    if adj not in slot_dates: continue
+                    for s2 in ["FN", "AN"]:
+                        for tp in allowed:
+                            k = (adj, s2, tp)
+                            if fexp[n].get(k, 0) < W_VAL_ADJ:
+                                set_score(fexp[n], k, W_VAL_ADJ)
 
-    # Non-submitted: any eligible slot with low base score
+    # Non-submitted: any eligible slot — tiny score so they fill only what's left
     for n in non_sub:
         allowed = DESIG_RULES[fac_d.get(n, "TA")][2]
         for s in ALL_S:
@@ -916,7 +947,15 @@ def run_optimizer(log_box):
                 k = (s["date"], s["session"], s["type"])
                 set_score(fexp[n], k, W_NON_SUB)
 
+    log(f"  Score window       : exact + flip + ±1/2/3 biz-days (exam-date only)")
+
     # ── Build MILP variables ──────────────────────────────────────
+    # Objective per variable = -(designation_priority + willingness_score)
+    # This means:
+    #   • Senior faculty (AP2+) are always preferred over TA/RA for any slot
+    #   • Within same designation tier, willingness match score decides
+    #   • A TA with perfect willingness match still scores lower than
+    #     an AP2 with no willingness (unless slot truly unmatched)
     def v(fi, si): return fi * NS + si
     NV    = N_FAC * NS
     c_obj = np.zeros(NV)
@@ -926,9 +965,10 @@ def run_optimizer(log_box):
     val_blocked = 0
     sat_blocked = 0
     for fi, fn in enumerate(ALL_FAC):
-        allowed  = DESIG_RULES[fac_d[fn]][2]
-        val_days = fac_val_dates.get(fn, set())
-        desig    = fac_d[fn]
+        allowed   = DESIG_RULES[fac_d[fn]][2]
+        val_days  = fac_val_dates.get(fn, set())
+        desig     = fac_d[fn]
+        d_prio    = DESIG_PRIORITY.get(desig, 0)
 
         for si, sl in enumerate(ALL_S):
             # Hard block: faculty's own valuation date
@@ -950,13 +990,22 @@ def run_optimizer(log_box):
 
             k  = (sl["date"], sl["session"], sl["type"])
             sc = fexp[fn].get(k, 0)
+
             if sc > 0:
-                c_obj[v(fi, si)] = -float(sc)
+                # Senior faculty + willingness match = highest priority
+                c_obj[v(fi, si)] = -(d_prio + float(sc))
             elif fn in submitted:
-                c_obj[v(fi, si)] = float(PENALTY)
+                # Submitted but this slot is outside their window — mild penalty
+                # Still add designation priority so senior faculty preferred
+                c_obj[v(fi, si)] = -(d_prio - float(PENALTY))
+            else:
+                # Non-submitted: designation priority + tiny base score
+                c_obj[v(fi, si)] = -(d_prio + float(W_NON_SUB))
 
     log(f"  Valuation-blocked vars : {val_blocked}")
     log(f"  Saturday-blocked vars  : {sat_blocked}  (non-TA/RA faculty)")
+    prio_fac = sum(1 for fn in ALL_FAC if DESIG_PRIORITY.get(fac_d[fn], 0) > 0)
+    log(f"  Priority faculty       : {prio_fac}  (P/ACP/SAP/AP3/AP2 preferred for slots)")
 
     # ── Build constraints ─────────────────────────────────────────
     rA, cA, dA, blo, bhi = [], [], [], [], []
@@ -999,22 +1048,28 @@ def run_optimizer(log_box):
         if on_i:  add_con([v(fi, si) for si in on_i],  [1] * len(on_i),  1, len(on_i))
         if off_i: add_con([v(fi, si) for si in off_i], [1] * len(off_i), 1, len(off_i))
 
-    # C6: Willingness floor — ≥80% of duties from willingness window
-    WILL_FLOOR   = 0.80
+    # C6: Willingness floor — at least 70% of duties from willingness window
+    #     Window = exact + flip + ±1/2/3 business days (score >= W_ADJ3)
+    #     Floor is adaptive: if window is small, floor is reduced proportionally
+    WILL_FLOOR   = 0.70
     forced_count = 0
     for fn in submitted:
         fi = FAC_IDX.get(fn)
         if fi is None: continue
         dr   = DESIG_RULES[fac_d[fn]]
+        # Slots within the willingness window (score >= W_ADJ3) and not blocked
         w_si = [si for si in range(NS)
                 if fexp[fn].get((ALL_S[si]["date"], ALL_S[si]["session"],
-                                 ALL_S[si]["type"]), 0) >= W_ADJ2
+                                 ALL_S[si]["type"]), 0) >= W_ADJ3
                 and ub[v(fi, si)] > 0]
         if not w_si: continue
-        floor_val = min(max(1, int(np.floor(dr[0] * WILL_FLOOR))), len(w_si))
+        # Adaptive floor: floor_val = max(1, 70% of required), but capped
+        # at available window size so constraint is always feasible
+        floor_val = max(1, int(np.floor(dr[0] * WILL_FLOOR)))
+        floor_val = min(floor_val, len(w_si))
         add_con([v(fi, si) for si in w_si], [1] * len(w_si), floor_val, dr[1])
         forced_count += 1
-    log(f"  Willingness floor constraints : {forced_count} faculty")
+    log(f"  Willingness floor constraints : {forced_count} faculty  (≥{int(WILL_FLOOR*100)}% from ±3-biz-day window)")
 
     # ── Solve ─────────────────────────────────────────────────────
     A   = csc_matrix((dA, (rA, cA)), shape=(nc[0], NV))
@@ -1033,8 +1088,9 @@ def run_optimizer(log_box):
         if sc >= W_EXACT:       return "Willingness-Exact"
         if sc >= W_ACP_ONLINE:  return "Willingness-ACPOnline"
         if sc >= W_FLIP:        return "Willingness-SessionFlip"
-        if sc >= W_ADJ:         return "Willingness-±1Day"
+        if sc >= W_ADJ1:        return "Willingness-±1Day"
         if sc >= W_ADJ2:        return "Willingness-±2Day"
+        if sc >= W_ADJ3:        return "Willingness-±3Day"
         if sc >= W_VAL_ADJ:     return "Willingness-ValAdj"
         return "OR-Assigned"
 
@@ -1077,7 +1133,11 @@ def run_optimizer(log_box):
             k = (d2, s2, t2)
             candidates = sorted(
                 [(n, fexp[n].get(k, 0)) for n in ALL_FAC if ok(n, d2, t2)],
-                key=lambda x: (-x[1], alloc_count[x[0]]))
+                key=lambda x: (
+                    -DESIG_PRIORITY.get(fac_d[x[0]], 0),  # 1st: senior faculty first
+                    -x[1],                                  # 2nd: willingness match score
+                    alloc_count[x[0]]                       # 3rd: least loaded
+                ))
             for fn, sc in candidates[:r2]:
                 alloc_count[fn] += 1
                 used_dates[fn].add(d2)
@@ -1173,12 +1233,24 @@ def run_optimizer(log_box):
     log(f"  ├─ Exact willingness       : {int((ab2 == 'Willingness-Exact').sum())}")
     log(f"  ├─ ACP offline→online      : {int((ab2 == 'Willingness-ACPOnline').sum())}")
     log(f"  ├─ Session flip FN↔AN      : {int((ab2 == 'Willingness-SessionFlip').sum())}")
-    log(f"  ├─ Adjacent day ±1 weekday : {int((ab2 == 'Willingness-±1Day').sum())}")
-    log(f"  ├─ Adjacent day ±2 weekday : {int((ab2 == 'Willingness-±2Day').sum())}")
+    log(f"  ├─ Adjacent ±1 biz-day     : {int((ab2 == 'Willingness-±1Day').sum())}")
+    log(f"  ├─ Adjacent ±2 biz-days    : {int((ab2 == 'Willingness-±2Day').sum())}")
+    log(f"  ├─ Adjacent ±3 biz-days    : {int((ab2 == 'Willingness-±3Day').sum())}")
     log(f"  ├─ Valuation-adj bonus     : {int((ab2 == 'Willingness-ValAdj').sum())}")
     log(f"  └─ Auto-assigned           : {int(ab2.isin(['Auto-Assigned', 'OR-Assigned', 'Gap-Fill']).sum())}")
     log(f"\n  ★ Overall willingness match: {overall_match_pct:.1f}%  ({will_matched}/{will_total_sub})")
     log(f"  ★ Faculty ≥80% match       : {above80}/{len(sub_sumdf)}")
+    log(f"\n  Designation-wise allotment breakdown:")
+    for dg in ["P", "ACP", "SAP", "AP3", "AP2", "TA", "RA"]:
+        sub2 = sumdf[sumdf["Designation"] == dg]
+        if sub2.empty: continue
+        prio_label = "⭐ priority" if DESIG_PRIORITY.get(dg, 0) > 0 else "  fill-in"
+        avg_match  = sub2.apply(
+            lambda r: r["Willingness_Total"] / r["Assigned_Duties"] * 100
+            if r["Assigned_Duties"] > 0 else 0, axis=1).mean()
+        log(f"  {dg:4} [{prio_label}] : {len(sub2):3} faculty | "
+            f"avg match {avg_match:.0f}% | "
+            f"auto-assigned {int(sub2['Auto_Assigned'].sum())}")
     log(f"\n  Slot fulfilment : {len(slotdf) - len(unmet)}/{len(slotdf)}"
         + (" ✓ ALL MET" if len(unmet) == 0 else f"  ⚠ {len(unmet)} unmet"))
     log(f"  Faculty targets : {len(sumdf) - len(gaps)}/{len(sumdf)}"
@@ -1577,6 +1649,42 @@ if user_mode == "Allotment":
         st.dataframe(pd.DataFrame({"Details": qd or ["Not available"]}),
                      use_container_width=True, hide_index=True)
 
+    # ── Allotment basis notice ────────────────────────────────────
+    st.markdown("""
+<div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:12px;
+            padding:14px 18px;margin:14px 0">
+  <div style="font-size:.88rem;font-weight:800;color:#14532d;margin-bottom:8px">
+    📋 Allotment Basis — How Your Duty Was Determined
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:.8rem">
+    <span style="background:#d1fae5;color:#065f46;font-weight:700;
+                 padding:4px 12px;border-radius:20px;border:1px solid #6ee7b7">
+      ✅ Exact Match — your exact date &amp; session
+    </span>
+    <span style="background:#fef3c7;color:#92400e;font-weight:700;
+                 padding:4px 12px;border-radius:20px;border:1px solid #fcd34d">
+      🔄 Session Adjusted — same date, FN↔AN swapped
+    </span>
+    <span style="background:#ffedd5;color:#9a3412;font-weight:700;
+                 padding:4px 12px;border-radius:20px;border:1px solid #fdba74">
+      📅 Date Adjusted — ±1/2/3 working days from your date
+    </span>
+    <span style="background:#ede9fe;color:#5b21b6;font-weight:700;
+                 padding:4px 12px;border-radius:20px;border:1px solid #c4b5fd">
+      🗓️ Valuation-Adjacent — day adjacent to your valuation date
+    </span>
+    <span style="background:#fee2e2;color:#991b1b;font-weight:700;
+                 padding:4px 12px;border-radius:20px;border:1px solid #fca5a5">
+      🔴 System-Assigned — no willingness match found
+    </span>
+  </div>
+  <div style="font-size:.76rem;color:#64748b;margin-top:10px">
+    The Examination Committee sincerely thanks you for your cooperation.
+    Every effort has been made to honour your willingness within institutional requirements.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
     # ── WhatsApp share (no deviation info for users) ──────────────
     msg = build_msg(sn, wdisp, vd, idisp, qd)
     st.markdown('<div class="panel"><div class="sec-title">📲 Share via WhatsApp</div></div>',
@@ -1638,6 +1746,55 @@ with left:
     st.subheader("Willingness Submission")
     st.write(f"**Designation:** {desig2}")
     st.write(f"**Options to Select:** {req_cnt}")
+
+    # ── Allotment consideration notice ────────────────────────────
+    st.markdown("""
+<div style="background:#f0f7ff;border:1.5px solid #93c5fd;border-radius:12px;
+            padding:14px 16px;margin:8px 0 14px 0">
+  <div style="font-size:.88rem;font-weight:800;color:#1e3a5f;margin-bottom:8px;
+              letter-spacing:.01em">
+    ℹ️ How Your Duty Will Be Allotted
+  </div>
+  <div style="font-size:.82rem;color:#334155;line-height:1.8">
+    The AI-assisted optimizer will try to match your submitted dates using the
+    following priority order:
+  </div>
+  <table style="width:100%;margin-top:8px;border-collapse:collapse;font-size:.81rem">
+    <tr>
+      <td style="padding:4px 8px;vertical-align:top;width:28px">✅</td>
+      <td style="padding:4px 6px;font-weight:700;color:#065f46;width:180px">Exact Match</td>
+      <td style="padding:4px 6px;color:#374151">Allotted on the exact date &amp; session you submit</td>
+    </tr>
+    <tr style="background:#f8fafc">
+      <td style="padding:4px 8px;vertical-align:top">🔄</td>
+      <td style="padding:4px 6px;font-weight:700;color:#92400e">Session Adjusted</td>
+      <td style="padding:4px 6px;color:#374151">Same date, but FN↔AN session swapped if needed</td>
+    </tr>
+    <tr>
+      <td style="padding:4px 8px;vertical-align:top">📅</td>
+      <td style="padding:4px 6px;font-weight:700;color:#9a3412">Date Adjusted</td>
+      <td style="padding:4px 6px;color:#374151">Shifted ±1, 2, or 3 working days from your date</td>
+    </tr>
+    <tr style="background:#f8fafc">
+      <td style="padding:4px 8px;vertical-align:top">🗓️</td>
+      <td style="padding:4px 6px;font-weight:700;color:#5b21b6">Valuation-Adjacent</td>
+      <td style="padding:4px 6px;color:#374151">Day before/after your valuation date (if duty needed)</td>
+    </tr>
+    <tr>
+      <td style="padding:4px 8px;vertical-align:top">🔴</td>
+      <td style="padding:4px 6px;font-weight:700;color:#991b1b">System-Assigned</td>
+      <td style="padding:4px 6px;color:#374151">No match found — assigned to meet slot requirements</td>
+    </tr>
+  </table>
+  <div style="font-size:.78rem;color:#64748b;margin-top:10px;border-top:1px solid #bfdbfe;
+              padding-top:8px">
+    💡 <strong>To maximise your match rate:</strong> submit dates spread across the exam
+    period. The more dates you provide, the higher the chance of an exact or
+    close match. Your valuation dates are automatically protected — no duty
+    will be assigned on those days.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     if desig2 == "ACP":
         st.info(
