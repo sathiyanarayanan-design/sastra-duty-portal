@@ -15,7 +15,7 @@ Login credentials:
 v2 improvements:
   1. Slot allocation probability shown live during willingness submission
   2. Admin enable/disable toggle for allotment view (gate file: allotment_gate.txt)
-  3. Deviation analysis in allotment page (replaces simple % line)
+  3. Deviation analysis in allotment page — ADMIN ONLY
 """
 
 import os
@@ -159,7 +159,7 @@ def wa_link(phone, msg):
     p = str(phone).strip().replace("+", "").replace(" ", "").replace("-", "")
     return f"https://wa.me/{p}?text={urllib.parse.quote(msg)}"
 
-def build_msg(name, will, val, inv, qp, match_str, dev_lines=None):
+def build_msg(name, will, val, inv, qp, match_str="", dev_lines=None):
     lines = [
         f"Dear {name},", "",
         "Examination Duty Details:", "",
@@ -169,11 +169,14 @@ def build_msg(name, will, val, inv, qp, match_str, dev_lines=None):
         *(val or ["Not available"]), "",
         "3) QP Feedback Dates:",
         *(qp or ["Not available"]), "",
-        "4) Willingness Match Summary:",
-        f"   {match_str}",
-        *(dev_lines or []), "",
-        "- SASTRA SoME Examination Committee"
     ]
+    if match_str:
+        lines += [
+            "4) Willingness Match Summary:",
+            f"   {match_str}",
+            *(dev_lines or []), "",
+        ]
+    lines.append("- SASTRA SoME Examination Committee")
     return "\n".join(lines)
 
 def render_header(logo=True):
@@ -304,13 +307,6 @@ def save_submission(faculty_name, slots):
 #        FEATURE 1 — SLOT PROBABILITY INDICATOR                  #
 # ═══════════════════════════════════════════════════════════════ #
 def slot_probability(all_will_df, duty_df, date_val, session_val):
-    """
-    Returns dict: seats, applicants, probability (0-100), label, colour.
-    Logic: probability = min(seats / applicants, 1.0) * 100
-    If no one has applied yet → 100 % (first applicant bonus).
-    If slot has 0 seats in duty file → 0 %.
-    """
-    # Seats required for this slot
     seats = 0
     if not duty_df.empty:
         m = duty_df[
@@ -320,7 +316,6 @@ def slot_probability(all_will_df, duty_df, date_val, session_val):
         if not m.empty:
             seats = int(m["Required"].sum())
 
-    # How many distinct faculty have already chosen this (date, session)
     applicants = 0
     if not all_will_df.empty and "Date" in all_will_df.columns:
         norm = pd.to_datetime(all_will_df["Date"], dayfirst=True, errors="coerce")
@@ -369,13 +364,9 @@ def render_prob_bar(info: dict, session_label: str):
 
 
 # ═══════════════════════════════════════════════════════════════ #
-#        FEATURE 3 — DEVIATION ANALYSIS  (allotment page)        #
+#        DEVIATION ANALYSIS  (admin-only helper)                 #
 # ═══════════════════════════════════════════════════════════════ #
 def classify_duty(alloc_by: str, duty_date, duty_sess: str, will_set: set):
-    """
-    Returns (status_label, emoji, detail_text, is_matched)
-    Uses Allocated_By tag from Final_Allocation.xlsx as primary signal.
-    """
     ab = str(alloc_by).strip()
 
     if ab == "Willingness-Exact":
@@ -415,23 +406,17 @@ def classify_duty(alloc_by: str, duty_date, duty_sess: str, will_set: set):
                 "No willingness submitted — system assigned this duty to meet slot requirements",
                 False)
 
-    # OR-Assigned or unknown
     return ("Not in Willingness", "🔴",
             f"No willingness found near {duty_date.strftime('%d-%m-%Y')} {duty_sess} "
             f"— system assigned to meet slot requirements", False)
 
 
 def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
-    """
-    Replaces the old single-line "Willingness accommodated: X%" with a full
-    deviation analysis: metrics, per-duty table, breakdown summary, banner.
-    Returns (match_pct, dev_lines_for_whatsapp).
-    """
+    """Admin-only: full deviation analysis with metrics, per-duty table, and summary."""
     if allot_rows.empty:
         st.info("No allotment data found for this faculty yet.")
         return "Not available", []
 
-    # ── Build per-duty rows ────────────────────────────────────────
     duty_rows = []
     for _, ar in allot_rows.iterrows():
         norm = pd.to_datetime(ar["Date"], dayfirst=True, errors="coerce")
@@ -463,12 +448,10 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
     match_pct = n_matched / total * 100 if total else 0.0
     dev_pct   = 100.0 - match_pct
 
-    # Exact slots from willingness that landed exactly in allotment
     allot_set    = {(d["norm_date"], d["sess"]) for d in duty_rows}
     exact_overlap = len(will_set & allot_set)
     will_used_pct = exact_overlap / len(will_set) * 100 if will_set else 0.0
 
-    # ── Metric cards ───────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📊 Willingness Match & Deviation")
 
@@ -486,14 +469,13 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         st.metric("Your Exact Slots Used", f"{will_used_pct:.1f}%",
                   help=f"{exact_overlap} of your {len(will_set)} submitted slots allotted exactly")
 
-    # ── Banner ─────────────────────────────────────────────────────
     if total == 0:
         return "Not available", []
     elif dev_pct == 0.0:
-        st.success("🎉 All your duties were allotted exactly as per your submitted willingness!")
+        st.success("🎉 All duties were allotted exactly as per submitted willingness!")
     elif n_no == 0:
         st.info(
-            f"ℹ️ All {total} duties fall within your willingness window. "
+            f"ℹ️ All {total} duties fall within the willingness window. "
             f"{n_sess + n_adj} minor adjustment(s) were made "
             f"(session swap or date shift of ±1/±2 days)."
         )
@@ -503,7 +485,6 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
             "and were system-assigned to meet examination slot requirements."
         )
 
-    # ── Per-duty table (colour-coded) ──────────────────────────────
     st.markdown("#### Duty-wise Breakdown")
 
     STATUS_BG = {
@@ -550,7 +531,6 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
 </div>
 """, unsafe_allow_html=True)
 
-    # ── Breakdown summary table ────────────────────────────────────
     st.markdown("#### Summary by Category")
     bd = pd.DataFrame({
         "Category": [
@@ -575,7 +555,6 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
     })
     st.dataframe(bd, use_container_width=True, hide_index=True)
 
-    # ── Build WhatsApp deviation lines ─────────────────────────────
     dev_lines = [f"Overall match: {match_pct:.1f}%  ({n_matched}/{total} duties within willingness window)"]
     if n_no == 0 and dev_pct == 0:
         dev_lines.append("All duties allotted exactly as per your willingness.")
@@ -1058,7 +1037,6 @@ if panel_mode == "Admin View":
     else:
         st.success("✅ Admin unlocked.")
 
-        # ── 4 tabs — added Portal Settings ───────────────────────
         t1, t2, t3, t4 = st.tabs([
             "📋 Willingness Records",
             "🤖 Run Optimizer",
@@ -1176,6 +1154,30 @@ if panel_mode == "Admin View":
                                       delta="All Met ✓" if len(um) == 0 else f"{len(um)} unmet ⚠")
                         st.dataframe(rep[sh_name], use_container_width=True, hide_index=True)
 
+                # ── Per-faculty deviation drill-down (admin only) ─
+                st.markdown("---")
+                st.markdown("#### 🔍 Per-Faculty Deviation Analysis")
+                st.caption("Select a faculty member to inspect their willingness match and deviation details.")
+                admin_fnames = fac_df["Name"].dropna().drop_duplicates().tolist()
+                admin_sel    = st.selectbox("Select Faculty", admin_fnames, key="admin_dev_sel")
+                admin_sc     = clean(admin_sel)
+
+                wd_admin = load_willingness()
+                admin_will_set = set()
+                if not wd_admin.empty:
+                    wm_admin = fac_mask(wd_admin, admin_sc)
+                    wr_admin = wd_admin[wm_admin]
+                    if not wr_admin.empty and {"Date", "Session"}.issubset(wr_admin.columns):
+                        for d2, s2 in zip(wr_admin["Date"], wr_admin["Session"]):
+                            nd = pd.to_datetime(d2, dayfirst=True, errors="coerce")
+                            if pd.notna(nd):
+                                admin_will_set.add((nd.date(), str(s2).upper()))
+
+                am_admin = fac_mask(av, admin_sc)
+                admin_allot_rows = av[am_admin].copy()
+                render_deviation_section(admin_allot_rows, admin_will_set)
+
+                st.markdown("---")
                 st.markdown("#### Full Allocation Table")
                 st.dataframe(av, use_container_width=True, hide_index=True)
                 col1, col2 = st.columns(2)
@@ -1190,7 +1192,7 @@ if panel_mode == "Admin View":
                             file_name="Allocation_Report.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # ── Tab 4: Portal Settings  (FEATURE 2) ──────────────────
+        # ── Tab 4: Portal Settings ────────────────────────────────
         with t4:
             st.markdown("### ⚙️ Portal Settings")
             st.markdown("---")
@@ -1257,7 +1259,7 @@ user_mode = st.radio("User View", ["Willingness", "Allotment"],
 if user_mode == "Allotment":
     st.markdown("### My Allotment Details")
 
-    # ── FEATURE 2: Gate check ─────────────────────────────────────
+    # Gate check
     if not gate_is_open():
         st.markdown(
             "<div style='background:#fef3c7;border:2px solid #f59e0b;border-radius:12px;"
@@ -1285,22 +1287,19 @@ if user_mode == "Allotment":
         vd = [f"{fmt_day(d.strftime('%d-%m-%Y'))} - Full Day" for d in valuation_dates_for(fr2)]
         qd = [fmt_day(d) for d in qp_dates_for(fr2)]
 
-    # Load willingness (for deviation analysis)
+    # Load willingness (for WhatsApp message only — not displayed to user)
     wd2 = load_willingness()
-    wdisp, will_set = [], set()
+    wdisp = []
     if not wd2.empty:
         wm = fac_mask(wd2, sc)
         wr = wd2[wm]
         if not wr.empty and {"Date", "Session"}.issubset(wr.columns):
             for d2, s2 in zip(wr["Date"], wr["Session"]):
                 wdisp.append(f"{fmt_day(d2)} - {str(s2).upper()}")
-                nd = pd.to_datetime(d2, dayfirst=True, errors="coerce")
-                if pd.notna(nd):
-                    will_set.add((nd.date(), str(s2).upper()))
 
     # Load allotment
     adf = pd.read_excel(FINAL_ALLOC_FILE) if os.path.exists(FINAL_ALLOC_FILE) else pd.DataFrame()
-    idisp, allot_rows = [], pd.DataFrame()
+    idisp = []
     if not adf.empty:
         am = fac_mask(adf, sc)
         allot_rows = adf[am].copy()
@@ -1309,12 +1308,14 @@ if user_mode == "Allotment":
                 dtype = str(ar.get("Type", "")).strip()
                 idisp.append(f"{fmt_day(ar['Date'])} - {str(ar['Session']).upper()} ({dtype})")
 
+    # ── 4 clean panels for the user ──────────────────────────────
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<div class="panel"><div class="sec-title">1) Willingness Options Submitted</div></div>',
                     unsafe_allow_html=True)
         st.dataframe(pd.DataFrame({"Details": wdisp or ["Not submitted"]}),
                      use_container_width=True, hide_index=True)
+
         st.markdown('<div class="panel"><div class="sec-title">3) Invigilation Dates (Final Allotment)</div></div>',
                     unsafe_allow_html=True)
         st.dataframe(pd.DataFrame({"Details": idisp or ["Not allotted yet"]}),
@@ -1324,16 +1325,14 @@ if user_mode == "Allotment":
                     unsafe_allow_html=True)
         st.dataframe(pd.DataFrame({"Details": vd or ["Not available"]}),
                      use_container_width=True, hide_index=True)
+
         st.markdown('<div class="panel"><div class="sec-title">4) QP Feedback Dates</div></div>',
                     unsafe_allow_html=True)
         st.dataframe(pd.DataFrame({"Details": qd or ["Not available"]}),
                      use_container_width=True, hide_index=True)
 
-    # ── FEATURE 3: Deviation analysis (replaces old single-line %) ─
-    match_str, dev_lines = render_deviation_section(allot_rows, will_set)
-
-    # ── WhatsApp share ────────────────────────────────────────────
-    msg = build_msg(sn, wdisp, vd, idisp, qd, match_str, dev_lines)
+    # ── WhatsApp share (no deviation info for users) ──────────────
+    msg = build_msg(sn, wdisp, vd, idisp, qd)
     st.markdown('<div class="panel"><div class="sec-title">📲 Share via WhatsApp</div></div>',
                 unsafe_allow_html=True)
     wph = st.text_input("WhatsApp Number (with country code)", placeholder="+919876543210")
@@ -1409,16 +1408,19 @@ with left:
             format_func=lambda d: d.strftime("%d-%m-%Y (%A)"))
         avail = set(sopts[sopts["DateOnly"] == picked]["Session"].dropna().astype(str).str.upper())
 
-        # ── FEATURE 1: Live probability bars for FN and AN ─────────
+        # Live probability bars — shown only when applicants >= 3x seats
         all_will_now = get_all_willingness()
         any_prob_shown = False
         for sess_opt in ["FN", "AN"]:
             if sess_opt in avail:
                 prob_info = slot_probability(all_will_now, sopts, picked, sess_opt)
-                render_prob_bar(prob_info, sess_opt)
-                any_prob_shown = True
+                seats_val = prob_info["seats"]
+                appl_val  = prob_info["applicants"]
+                if seats_val > 0 and appl_val >= 3 * seats_val:
+                    render_prob_bar(prob_info, sess_opt)
+                    any_prob_shown = True
         if any_prob_shown:
-            st.caption("⚡ Probability updates as more faculty submit willingness.")
+            st.caption("⚡ Probability shown when demand is 3× or more than available seats.")
 
         b1, b2 = st.columns(2)
         with b1:
