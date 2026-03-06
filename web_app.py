@@ -618,8 +618,6 @@ def render_calendar(duty_df, val_dates, title):
 
     st.markdown(
         "<span style='font-size:.82rem'>"
-        "<span style='background:#f1f5f9;border:1px solid #cbd5e1;border-radius:4px;"
-        "padding:2px 8px;margin-right:6px'>⬜ No Duty</span>"
         "<span style='background:#fce7f3;border:1px solid #f9a8d4;border-radius:4px;"
         "padding:2px 8px;margin-right:6px'>🩷 Valuation Locked</span>"
         "<span style='background:#fff;border:1px solid #cbd5e1;border-radius:4px;"
@@ -682,13 +680,13 @@ def render_calendar(duty_df, val_dates, title):
             for dt in week_dates:
                 if dt is None:
                     date_row += (
-                        "<td colspan='2' style='background:#f8fafc;"
+                        "<td colspan='2' style='background:#ffffff;"
                         "border:1px solid #e2e8f0;height:20px'></td>"
                     )
                 else:
                     is_val = dt in val_set
                     is_sun = dt.weekday() == 6
-                    bg     = "#fce7f3" if is_val else ("#f8fafc" if is_sun else "#f1f5f9")
+                    bg     = "#fce7f3" if is_val else "#ffffff"
                     color  = "#be185d" if is_val else ("#94a3b8" if is_sun else "#0f172a")
                     label  = f"{dt.day}" + (" 🔒" if is_val else "")
                     date_row += (
@@ -705,9 +703,9 @@ def render_calendar(duty_df, val_dates, title):
             for dt in week_dates:
                 if dt is None:
                     duty_row += (
-                        "<td style='background:#f8fafc;border:1px solid #e2e8f0;"
+                        "<td style='background:#ffffff;border:1px solid #e2e8f0;"
                         "min-width:44px;height:24px'></td>"
-                        "<td style='background:#f8fafc;border:1px solid #e2e8f0;"
+                        "<td style='background:#ffffff;border:1px solid #e2e8f0;"
                         "min-width:44px;height:24px'></td>"
                     )
                 else:
@@ -719,8 +717,8 @@ def render_calendar(duty_df, val_dates, title):
                             bg      = "#fce7f3"
                             content = ""
                         elif req == 0:
-                            bg      = "#f8fafc" if is_sun else "#f1f5f9"
-                            content = "<span style='font-size:.65rem;color:#cbd5e1'>—</span>"
+                            bg      = "#ffffff"
+                            content = ""
                         else:
                             bg      = "#ffffff"
                             content = (
