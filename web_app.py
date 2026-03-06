@@ -86,8 +86,7 @@ DESIG_PRIORITY = {
 
 WILL_TAGS = {
     "Willingness-Exact", "Willingness-ACPOnline",
-    "Willingness-SessionFlip", "Willingness-±1Day", "Willingness-±2Day",
-    "Willingness-±3Day", "Willingness-ValAdj"
+    "Willingness-SessionFlip", "Willingness-±1Day", "Willingness-ValAdj"
 }
 
 # ─── Page config ─────────────────────────────────────────────── #
@@ -399,24 +398,20 @@ def classify_duty(alloc_by: str, duty_date, duty_sess: str, will_set: set):
                 f"You submitted {duty_date.strftime('%d-%m-%Y')} {opp} → allotted {duty_sess} "
                 f"(same date, session swapped)", True)
 
-    if ab in ("Willingness-±1Day", "Willingness-±2Day", "Willingness-±3Day"):
-        days_n = "1" if "1Day" in ab else ("2" if "2Day" in ab else "3")
-        window = f"±{days_n} biz-day{'s' if days_n != '1' else ''}"
+    if ab == "Willingness-±1Day":
         closest = ""
-        for bd in [1, 2, 3]:
-            for direction in [1, -1]:
-                adj = duty_date + datetime.timedelta(days=bd * direction)
-                for s in ["FN", "AN"]:
-                    if (adj, s) in will_set:
-                        direction_lbl = "after" if direction > 0 else "before"
-                        closest = (f"You submitted {adj.strftime('%d-%m-%Y')} {s} "
-                                   f"→ duty shifted {bd} biz-day(s) {direction_lbl} "
-                                   f"to {duty_date.strftime('%d-%m-%Y')} {duty_sess}")
-                        break
-                if closest: break
+        for direction in [1, -1]:
+            adj = duty_date + datetime.timedelta(days=direction)
+            for s in ["FN", "AN"]:
+                if (adj, s) in will_set:
+                    direction_lbl = "after" if direction > 0 else "before"
+                    closest = (f"You submitted {adj.strftime('%d-%m-%Y')} {s} "
+                               f"→ duty shifted 1 working day {direction_lbl} "
+                               f"to {duty_date.strftime('%d-%m-%Y')} {duty_sess}")
+                    break
             if closest: break
-        return (f"Date Adjusted ({window})", "📅",
-                closest or f"Allotted within {window} of your submitted willingness", True)
+        return ("Date Adjusted (±1 day)", "📅",
+                closest or f"Allotted 1 working day from your submitted willingness", True)
 
     if ab == "Willingness-ValAdj":
         return ("Valuation-Adjacent", "🗓️",
@@ -514,7 +509,6 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Exact Match":            ("#d1fae5", "#065f46"),
         "Session Adjusted":       ("#fef3c7", "#92400e"),
         "Date Adjusted (±1 day)": ("#ffedd5", "#9a3412"),
-        "Date Adjusted (±2 days)":("#ffedd5", "#9a3412"),
         "Valuation-Adjacent":     ("#ede9fe", "#5b21b6"),
         "Not in Willingness":     ("#fee2e2", "#991b1b"),
         "Auto-Assigned":          ("#e5e7eb", "#374151"),
@@ -560,7 +554,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Category": [
             "✅ Exact Match",
             "🔄 Session Adjusted (FN↔AN, same date)",
-            "📅 Date Adjusted (±1/2/3 biz-days)",
+            "📅 Date Adjusted (±1 working day)",
             "🗓️ Valuation-Adjacent (day before/after val date)",
             "🔴 Not in Willingness / Auto-Assigned",
         ],
@@ -575,7 +569,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
         "Meaning": [
             "Allotted on the exact date & session you submitted",
             "Same date, but morning/afternoon slot was swapped",
-            "Duty shifted 1, 2, or 3 business days from your submitted date",
+            "Duty shifted by 1 working day from your submitted date",
             "Allotted on a weekday adjacent to your valuation date",
             "No matching date — system assigned to fill slot",
         ],
@@ -588,7 +582,7 @@ def render_deviation_section(allot_rows: pd.DataFrame, will_set: set):
     else:
         if n_exact   > 0: dev_lines.append(f"  ✅ Exact match          : {n_exact} duty(ies)")
         if n_sess    > 0: dev_lines.append(f"  🔄 Session swapped      : {n_sess} duty(ies) (FN↔AN, same date)")
-        if n_adj     > 0: dev_lines.append(f"  📅 Date shifted         : {n_adj} duty(ies) (±1/2/3 biz-days)")
+        if n_adj     > 0: dev_lines.append(f"  📅 Date shifted         : {n_adj} duty(ies) (±1 working day)")
         if n_valadj  > 0: dev_lines.append(f"  🗓️ Valuation-adjacent   : {n_valadj} duty(ies) (day before/after val date)")
         if n_no      > 0: dev_lines.append(f"  🔴 System-assigned      : {n_no} duty(ies) (outside willingness window)")
 
@@ -914,15 +908,14 @@ def run_optimizer(log_box):
         for tp in allowed:
             set_score(fexp[n], (dt2, opp, tp), W_FLIP)
 
-        # Rule 2: ±1, ±2, ±3 business days — only on actual exam slot dates
-        for bdays, score in [(1, W_ADJ1), (2, W_ADJ2), (3, W_ADJ3)]:
-            for direction in [+1, -1]:
-                adj = next_weekday(dt2, bdays * direction)
-                if adj not in slot_dates:
-                    continue          # only score if exam actually exists that day
-                for s2 in ["FN", "AN"]:
-                    for tp in allowed:
-                        set_score(fexp[n], (adj, s2, tp), score)
+        # Rule 2: ±1 business day only (skip weekends, only on exam dates)
+        for direction in [+1, -1]:
+            adj = next_weekday(dt2, direction)
+            if adj not in slot_dates:
+                continue
+            for s2 in ["FN", "AN"]:
+                for tp in allowed:
+                    set_score(fexp[n], (adj, s2, tp), W_ADJ1)
 
     # Rule 4: bonus for slots adjacent to faculty's own valuation date
     for n in ALL_FAC:
@@ -947,7 +940,7 @@ def run_optimizer(log_box):
                 k = (s["date"], s["session"], s["type"])
                 set_score(fexp[n], k, W_NON_SUB)
 
-    log(f"  Score window       : exact + flip + ±1/2/3 biz-days (exam-date only)")
+    log(f"  Score window       : exact + flip + ±1 biz-day (exam-date only)")
 
     # ── Build MILP variables ──────────────────────────────────────
     # Objective per variable = -(designation_priority + willingness_score)
@@ -1057,19 +1050,17 @@ def run_optimizer(log_box):
         fi = FAC_IDX.get(fn)
         if fi is None: continue
         dr   = DESIG_RULES[fac_d[fn]]
-        # Slots within the willingness window (score >= W_ADJ3) and not blocked
+        # Slots within window (exact + flip + ±1 biz-day only) and not blocked
         w_si = [si for si in range(NS)
                 if fexp[fn].get((ALL_S[si]["date"], ALL_S[si]["session"],
-                                 ALL_S[si]["type"]), 0) >= W_ADJ3
+                                 ALL_S[si]["type"]), 0) >= W_ADJ1
                 and ub[v(fi, si)] > 0]
         if not w_si: continue
-        # Adaptive floor: floor_val = max(1, 70% of required), but capped
-        # at available window size so constraint is always feasible
         floor_val = max(1, int(np.floor(dr[0] * WILL_FLOOR)))
         floor_val = min(floor_val, len(w_si))
         add_con([v(fi, si) for si in w_si], [1] * len(w_si), floor_val, dr[1])
         forced_count += 1
-    log(f"  Willingness floor constraints : {forced_count} faculty  (≥{int(WILL_FLOOR*100)}% from ±3-biz-day window)")
+    log(f"  Willingness floor constraints : {forced_count} faculty  (≥{int(WILL_FLOOR*100)}% from exact+flip+±1-biz-day window)")
 
     # ── Solve ─────────────────────────────────────────────────────
     A   = csc_matrix((dA, (rA, cA)), shape=(nc[0], NV))
@@ -1089,8 +1080,6 @@ def run_optimizer(log_box):
         if sc >= W_ACP_ONLINE:  return "Willingness-ACPOnline"
         if sc >= W_FLIP:        return "Willingness-SessionFlip"
         if sc >= W_ADJ1:        return "Willingness-±1Day"
-        if sc >= W_ADJ2:        return "Willingness-±2Day"
-        if sc >= W_ADJ3:        return "Willingness-±3Day"
         if sc >= W_VAL_ADJ:     return "Willingness-ValAdj"
         return "OR-Assigned"
 
@@ -1234,8 +1223,6 @@ def run_optimizer(log_box):
     log(f"  ├─ ACP offline→online      : {int((ab2 == 'Willingness-ACPOnline').sum())}")
     log(f"  ├─ Session flip FN↔AN      : {int((ab2 == 'Willingness-SessionFlip').sum())}")
     log(f"  ├─ Adjacent ±1 biz-day     : {int((ab2 == 'Willingness-±1Day').sum())}")
-    log(f"  ├─ Adjacent ±2 biz-days    : {int((ab2 == 'Willingness-±2Day').sum())}")
-    log(f"  ├─ Adjacent ±3 biz-days    : {int((ab2 == 'Willingness-±3Day').sum())}")
     log(f"  ├─ Valuation-adj bonus     : {int((ab2 == 'Willingness-ValAdj').sum())}")
     log(f"  └─ Auto-assigned           : {int(ab2.isin(['Auto-Assigned', 'OR-Assigned', 'Gap-Fill']).sum())}")
     log(f"\n  ★ Overall willingness match: {overall_match_pct:.1f}%  ({will_matched}/{will_total_sub})")
@@ -1626,29 +1613,6 @@ if user_mode == "Allotment":
                 dtype = str(ar.get("Type", "")).strip()
                 idisp.append(f"{fmt_day(ar['Date'])} - {str(ar['Session']).upper()} ({dtype})")
 
-    # ── 4 clean panels for the user ──────────────────────────────
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown('<div class="panel"><div class="sec-title">1) Willingness Options Submitted</div></div>',
-                    unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame({"Details": wdisp or ["Not submitted"]}),
-                     use_container_width=True, hide_index=True)
-
-        st.markdown('<div class="panel"><div class="sec-title">3) Invigilation Dates (Final Allotment)</div></div>',
-                    unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame({"Details": idisp or ["Not allotted yet"]}),
-                     use_container_width=True, hide_index=True)
-    with c2:
-        st.markdown('<div class="panel"><div class="sec-title">2) Valuation Dates (Full Day)</div></div>',
-                    unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame({"Details": vd or ["Not available"]}),
-                     use_container_width=True, hide_index=True)
-
-        st.markdown('<div class="panel"><div class="sec-title">4) QP Feedback Dates</div></div>',
-                    unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame({"Details": qd or ["Not available"]}),
-                     use_container_width=True, hide_index=True)
-
     # ── Allotment basis notice ────────────────────────────────────
     st.markdown("""
 <div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:12px;
@@ -1667,7 +1631,7 @@ if user_mode == "Allotment":
     </span>
     <span style="background:#ffedd5;color:#9a3412;font-weight:700;
                  padding:4px 12px;border-radius:20px;border:1px solid #fdba74">
-      📅 Date Adjusted — ±1/2/3 working days from your date
+      📅 Date Adjusted — ±1 working day from your date
     </span>
     <span style="background:#ede9fe;color:#5b21b6;font-weight:700;
                  padding:4px 12px;border-radius:20px;border:1px solid #c4b5fd">
@@ -1773,7 +1737,7 @@ with left:
     <tr>
       <td style="padding:4px 8px;vertical-align:top">📅</td>
       <td style="padding:4px 6px;font-weight:700;color:#9a3412">Date Adjusted</td>
-      <td style="padding:4px 6px;color:#374151">Shifted ±1, 2, or 3 working days from your date</td>
+      <td style="padding:4px 6px;color:#374151">Shifted ±1 working day from your submitted date</td>
     </tr>
     <tr style="background:#f8fafc">
       <td style="padding:4px 8px;vertical-align:top">🗓️</td>
