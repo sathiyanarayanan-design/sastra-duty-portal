@@ -842,9 +842,31 @@ def run_optimizer(log_box):
         wdf["Date"]    = pd.to_datetime(wdf["Date"], dayfirst=True, errors="coerce")
         wdf["Session"] = wdf["Session"].astype(str).str.strip().str.upper()
         wdf = wdf.dropna(subset=["Date"])
-    submitted = set(wdf["Faculty"].str.strip().unique()) if not wdf.empty else set()
-    non_sub   = [n for n in ALL_FAC if n not in submitted]
+    submitted  = set(wdf["Faculty"].str.strip().unique()) if not wdf.empty else set()
+    non_sub    = [n for n in ALL_FAC if n not in submitted]
+
+    # Count how many willingness dates each faculty submitted vs required
+    sub_counts = {}
+    if not wdf.empty:
+        for n, grp in wdf.groupby("Faculty"):
+            sub_counts[n.strip()] = len(grp)
+
+    under_sub = []   # submitted but fewer dates than required
+    for n in submitted:
+        required = DESIG_RULES.get(fac_d.get(n, "TA"), (0,0))[0]
+        given    = sub_counts.get(n, 0)
+        if given < required:
+            under_sub.append((n, given, required))
+
     log(f"  Willingness loaded : {len(submitted)} submitted | {len(non_sub)} not submitted")
+    if under_sub:
+        log(f"  ⚠ Under-submitted  : {len(under_sub)} faculty submitted fewer dates than required:")
+        for n, given, req in sorted(under_sub, key=lambda x: x[0]):
+            log(f"      {n}  →  submitted {given} / required {req}")
+    if non_sub:
+        log(f"  ⚠ No submission    : {len(non_sub)} faculty — will be auto-assigned:")
+        for n in non_sub:
+            log(f"      {n}")
 
     log("")
     for fp, lbl in [(OFFLINE_FILE, "Offline"), (ONLINE_FILE, "Online")]:
@@ -1289,9 +1311,11 @@ def run_optimizer(log_box):
         wt  = int(ab.isin(WILL_TAGS).sum())
         sumrows.append({
             "Name": fn, "Designation": d2,
-            "Submitted":        "Yes" if fn in submitted else "No",
-            "Required_Duties":  dr[0],
-            "Assigned_Duties":  tot,
+            "Submitted":          "Yes" if fn in submitted else "No",
+            "Submitted_Count":    sub_counts.get(fn, 0),
+            "Required_Duties":    dr[0],
+            "Submission_Shortfall": max(0, dr[0] - sub_counts.get(fn, 0)),
+            "Assigned_Duties":    tot,
             "Willingness_Total": wt,
             "Match_%":          f"{wt/tot*100:.0f}%" if tot else "N/A",
             "Exact_Match":      int((ab == "Willingness-Exact").sum()),
@@ -1398,6 +1422,17 @@ def run_optimizer(log_box):
             log(f"    {r['Name']} ({r['Designation']}) — {r['Gap']} duty gap")
     else:
         log(f"  ✓ All faculty assigned correct duty count")
+
+    if non_sub:
+        log(f"\n  ⚠ No-submission faculty ({len(non_sub)}) — auto-assigned:")
+        for n in non_sub:
+            log(f"      {n}  ({fac_d.get(n,'?')})")
+    if under_sub:
+        log(f"\n  ⚠ Under-submitted faculty ({len(under_sub)}):")
+        for n, given, req in under_sub:
+            rf2   = alloc[alloc["Name"] == n]
+            exact = int(rf2["Allocated_By"].isin(WILL_TAGS).sum())
+            log(f"      {n}  ({fac_d.get(n,'?')})  submitted {given}/{req}  →  {exact} matched")
 
     return alloc, sumdf, slotdf, desigdf
 
@@ -1572,8 +1607,51 @@ if panel_mode == "Admin View":
                     lb2 = st.empty()
                     with st.spinner("Running CP-SAT optimization..."):
                         try:
-                            run_optimizer(lb2)
+                            alloc_out, sumdf_out, slotdf_out, _ = run_optimizer(lb2)
                             st.success("✅ Optimization complete! Review results, then enable the allotment view in Portal Settings.")
+
+                            # ── Submission status panel ───────────────
+                            wd_check = get_all_willingness()
+                            fr_check = pd.read_excel(FACULTY_FILE)
+                            fr_check.columns = fr_check.columns.str.strip()
+                            fr_check.rename(columns={fr_check.columns[0]: "Name",
+                                                     fr_check.columns[1]: "Designation"}, inplace=True)
+                            fr_check["Name"]        = fr_check["Name"].astype(str).str.strip()
+                            fr_check["Designation"] = fr_check["Designation"].astype(str).str.strip().str.upper()
+
+                            sub_set  = set(wd_check["Faculty"].str.strip().unique()) if not wd_check.empty else set()
+                            sub_cnt  = {}
+                            if not wd_check.empty:
+                                for nm, grp in wd_check.groupby("Faculty"):
+                                    sub_cnt[nm.strip()] = len(grp)
+
+                            no_sub_names    = []
+                            under_sub_names = []
+                            for _, frow in fr_check.iterrows():
+                                nm   = frow["Name"]
+                                desig = str(frow["Designation"]).strip().upper()
+                                req  = DESIG_RULES.get(desig if desig in DESIG_RULES else "TA", (0,0))[0]
+                                if nm not in sub_set:
+                                    no_sub_names.append((nm, desig, req))
+                                elif sub_cnt.get(nm, 0) < req:
+                                    under_sub_names.append((nm, desig, sub_cnt.get(nm,0), req))
+
+                            if no_sub_names or under_sub_names:
+                                st.markdown("---")
+                                st.markdown("#### ⚠️ Willingness Submission Issues")
+                                if no_sub_names:
+                                    st.error(f"**{len(no_sub_names)} faculty did not submit willingness at all:**")
+                                    rows = [{"Name": nm, "Designation": DESIG_FULL.get(d, d),
+                                             "Required Duties": r} for nm, d, r in no_sub_names]
+                                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                                if under_sub_names:
+                                    st.warning(f"**{len(under_sub_names)} faculty submitted fewer dates than required:**")
+                                    rows = [{"Name": nm, "Designation": DESIG_FULL.get(d, d),
+                                             "Submitted": g, "Required": r,
+                                             "Shortfall": r - g}
+                                            for nm, d, g, r in under_sub_names]
+                                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
                             st.balloons()
                         except Exception as e:
                             st.error(f"Optimizer error: {e}")
