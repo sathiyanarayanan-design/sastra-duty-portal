@@ -52,7 +52,7 @@ GATE_FILE         = "allotment_gate.txt"   # "1" = open, "0" = locked
 # ─── Designation rules ───────────────────────────────────────── #
 DESIG_RULES = {
     "P":   (1, 1, ["Online"]),
-    "ACP": (2, 3, ["Online", "Offline"]),
+    "ACP": (2, 2, ["Online", "Offline"]),
     "SAP": (3, 3, ["Offline"]),
     "AP3": (3, 3, ["Offline"]),
     "AP2": (3, 3, ["Offline"]),
@@ -1035,11 +1035,11 @@ def run_optimizer(log_box):
         fi = FAC_IDX[fn]
         if on_i: add_con([v(fi, si) for si in on_i], [1] * len(on_i), 1, 1)
 
-    # C5: ACP — at least 1 online AND at least 1 offline
+    # C5: ACP — EXACTLY 1 online AND EXACTLY 1 offline (total = 2)
     for fn in dgroups["ACP"]:
         fi = FAC_IDX[fn]
-        if on_i:  add_con([v(fi, si) for si in on_i],  [1] * len(on_i),  1, len(on_i))
-        if off_i: add_con([v(fi, si) for si in off_i], [1] * len(off_i), 1, len(off_i))
+        if on_i:  add_con([v(fi, si) for si in on_i],  [1] * len(on_i),  1, 1)
+        if off_i: add_con([v(fi, si) for si in off_i], [1] * len(off_i), 1, 1)
 
     # C6: Willingness floor — at least 70% of duties from willingness window
     #     Window = exact + flip + ±1/2/3 business days (score >= W_ADJ3)
@@ -1101,21 +1101,23 @@ def run_optimizer(log_box):
     else:
         log("  ⚠ MILP infeasible — greedy fallback...")
         method = "Greedy Fallback"
-        alloc_count = defaultdict(int)
-        used_dates  = defaultdict(set)
+        alloc_count    = defaultdict(int)
+        used_dates     = defaultdict(set)
+        acp_type_count = defaultdict(lambda: {"Online": 0, "Offline": 0})
 
         def remaining(n): return DESIG_RULES[fac_d[n]][0] - alloc_count[n]
 
         def ok(n, dt_, tp_):
             val_days = fac_val_dates.get(n, set())
             desig_   = fac_d[n]
-            return (
-                tp_ in DESIG_RULES[desig_][2]
-                and dt_ not in val_days
-                and dt_ not in used_dates[n]
-                and remaining(n) > 0
-                and not (dt_.weekday() == 5 and desig_ not in SAT_DESIG)
-            )
+            if tp_ not in DESIG_RULES[desig_][2]:          return False
+            if dt_ in val_days:                             return False
+            if dt_ in used_dates[n]:                        return False
+            if remaining(n) <= 0:                           return False
+            if dt_.weekday() == 5 and desig_ not in SAT_DESIG: return False
+            # ACP: must end up with exactly 1 online + 1 offline
+            if desig_ == "ACP" and acp_type_count[n][tp_] >= 1: return False
+            return True
 
         for sl in sorted(ALL_S, key=lambda s: -s["required"]):
             d2, s2, r2, t2 = sl["date"], sl["session"], sl["required"], sl["type"]
@@ -1130,6 +1132,7 @@ def run_optimizer(log_box):
             for fn, sc in candidates[:r2]:
                 alloc_count[fn] += 1
                 used_dates[fn].add(d2)
+                if fac_d[fn] == "ACP": acp_type_count[fn][t2] += 1
                 assigned.append({"Name": fn, "Date": d2, "Session": s2,
                                   "Type": t2, "Allocated_By": tag(fn, k, sc)})
         for fn in ALL_FAC:
@@ -1140,6 +1143,7 @@ def run_optimizer(log_box):
                 if not ok(fn, d2, t2): continue
                 alloc_count[fn] += 1
                 used_dates[fn].add(d2)
+                if fac_d[fn] == "ACP": acp_type_count[fn][t2] += 1
                 assigned.append({"Name": fn, "Date": d2, "Session": s2,
                                   "Type": t2, "Allocated_By": "Gap-Fill"})
 
