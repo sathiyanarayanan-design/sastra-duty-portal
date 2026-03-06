@@ -1623,46 +1623,49 @@ if user_mode == "Allotment":
         allot_rows = adf[am].copy()
         if not allot_rows.empty and {"Date", "Session"}.issubset(allot_rows.columns):
             for _, ar in allot_rows.iterrows():
-                dtype = str(ar.get("Type", "")).strip()
-                idisp.append(f"{fmt_day(ar['Date'])} - {str(ar['Session']).upper()} ({dtype})")
+                dtype    = str(ar.get("Type", "")).strip()
+                raw_date = ar["Date"]
+                try:
+                    dt_obj   = pd.to_datetime(raw_date, dayfirst=True)
+                    sat_tag  = " — Saturday" if dt_obj.weekday() == 5 else ""
+                except Exception:
+                    sat_tag  = ""
+                idisp.append(f"{fmt_day(raw_date)} - {str(ar['Session']).upper()} ({dtype}){sat_tag}")
 
-    # ── Allotment basis notice ────────────────────────────────────
-    st.markdown("""
-<div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:12px;
-            padding:14px 18px;margin:14px 0">
-  <div style="font-size:.88rem;font-weight:800;color:#14532d;margin-bottom:8px">
-    📋 Allotment Basis — How Your Duty Was Determined
-  </div>
-  <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:.8rem">
-    <span style="background:#d1fae5;color:#065f46;font-weight:700;
-                 padding:4px 12px;border-radius:20px;border:1px solid #6ee7b7">
-      ✅ Exact Match — your exact date &amp; session
-    </span>
-    <span style="background:#fef3c7;color:#92400e;font-weight:700;
-                 padding:4px 12px;border-radius:20px;border:1px solid #fcd34d">
-      🔄 Session Adjusted — same date, FN↔AN swapped
-    </span>
-    <span style="background:#ffedd5;color:#9a3412;font-weight:700;
-                 padding:4px 12px;border-radius:20px;border:1px solid #fdba74">
-      📅 Date Adjusted — ±1 working day from your date
-    </span>
-    <span style="background:#ede9fe;color:#5b21b6;font-weight:700;
-                 padding:4px 12px;border-radius:20px;border:1px solid #c4b5fd">
-      🗓️ Valuation-Adjacent — day adjacent to your valuation date
-    </span>
-    <span style="background:#fee2e2;color:#991b1b;font-weight:700;
-                 padding:4px 12px;border-radius:20px;border:1px solid #fca5a5">
-      🔴 System-Assigned — no willingness match found
-    </span>
-  </div>
-  <div style="font-size:.76rem;color:#64748b;margin-top:10px">
-    The Examination Committee sincerely thanks you for your cooperation.
-    Every effort has been made to honour your willingness within institutional requirements.
-  </div>
-</div>
-""", unsafe_allow_html=True)
+    # ── 4 panels: willingness, valuation, IG allotment, QP dates ──
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown('<div class="panel"><div class="sec-title">📝 Willingness Submitted</div></div>',
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Date & Session": wdisp or ["Not submitted"]}),
+                     use_container_width=True, hide_index=True)
 
-    # ── WhatsApp share (no deviation info for users) ──────────────
+        st.markdown('<div class="panel"><div class="sec-title">🏛️ IG Duty Allotment</div></div>',
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Date, Session & Type": idisp or ["Not allotted yet"]}),
+                     use_container_width=True, hide_index=True)
+    with c2:
+        st.markdown('<div class="panel"><div class="sec-title">📋 Valuation Dates</div></div>',
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Date": vd or ["Not available"]}),
+                     use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="panel"><div class="sec-title">💬 QP Feedback Dates</div></div>',
+                    unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"Date": qd or ["Not available"]}),
+                     use_container_width=True, hide_index=True)
+
+    st.markdown(
+        "<div style='margin-top:10px;padding:10px 14px;background:#f1f5f9;"
+        "border-radius:8px;border:1px solid #cbd5e1;font-size:.82rem;color:#475569'>"
+        "📩 For any specific support or clarification regarding your duty allotment, "
+        "please contact the <strong>University Examination Committee, "
+        "School of Mechanical Engineering (SoME)</strong>."
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    # ── WhatsApp share ────────────────────────────────────────────
     msg = build_msg(sn, wdisp, vd, idisp, qd)
     st.markdown('<div class="panel"><div class="sec-title">📲 Share via WhatsApp</div></div>',
                 unsafe_allow_html=True)
