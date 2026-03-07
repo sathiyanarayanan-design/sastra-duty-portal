@@ -974,166 +974,15 @@ def run_optimizer(log_box):
 
     log(f"  Preference window  : exact + flip + ±1 biz-day (exam dates only)")
 
-    # ══════════════════════════════════════════════════════════════
-    #  CP-SAT MODEL
-    # ══════════════════════════════════════════════════════════════
-    model = cp_model.CpModel()
-
-    # Boolean variable x[(fi,si)] = 1 if faculty fi assigned to slot si.
-    # Variables only created for valid pairs — blocked pairs never added.
-    x              = {}
-    feasible_pairs = []   # (fi, fn, si, sl)
-
-    val_blocked = sat_blocked = type_blocked = 0
-    for fi, fn in enumerate(ALL_FAC):
-        desig    = fac_d[fn]
-        allowed  = DESIG_RULES[desig][2]
-        val_days = fac_val_dates.get(fn, set())
-        for si, sl in enumerate(ALL_S):
-            if sl["type"] not in allowed:
-                type_blocked += 1
-                continue
-            if sl["date"] in val_days:
-                val_blocked += 1
-                continue
-            if sl["date"].weekday() == 5 and desig not in SAT_DESIG:
-                sat_blocked += 1
-                continue
-            x[(fi, si)] = model.NewBoolVar(f"x_{fi}_{si}")
-            feasible_pairs.append((fi, fn, si, sl))
-
-    log(f"  Hard-blocked       : {val_blocked} val-date | "
-        f"{sat_blocked} saturday | {type_blocked} wrong-type")
-    log(f"  Decision variables : {len(x)}")
-
-    # Check and warn for any slot still under-staffed after normal blocking
-    slots_for_fac  = defaultdict(list)
-    facs_for_slot  = defaultdict(list)
-    for fi, fn, si, sl in feasible_pairs:
-        slots_for_fac[fi].append((si, sl, x[(fi, si)]))
-        facs_for_slot[si].append((fi, fn, x[(fi, si)]))
-
-    for si, sl in enumerate(ALL_S):
-        fac_vars = [var for fi, fn, var in facs_for_slot[si]]
-        if len(fac_vars) < sl["required"]:
-            log(f"  ⚠ {sl['date']} {sl['session']} {sl['type']}: "
-                f"{len(fac_vars)} eligible faculty for {sl['required']} seats")
-
-    # ── C1: Every seat in every slot MUST be filled (hard) ────────
-    for si, sl in enumerate(ALL_S):
-        fac_vars = [var for fi, fn, var in facs_for_slot[si]]
-        if fac_vars:
-            model.Add(sum(fac_vars) == sl["required"])
-
-    # ── C2: Each faculty gets their required duty count ────────────
-    for fi, fn in enumerate(ALL_FAC):
-        dr       = DESIG_RULES[fac_d[fn]]
-        fac_vars = [var for si, sl, var in slots_for_fac[fi]]
-        if fac_vars:
-            model.Add(sum(fac_vars) >= dr[0])
-            model.Add(sum(fac_vars) <= dr[1])
-
-    # ── C3: No faculty on more than 1 duty per calendar date ───────
-    date_fac_vars = defaultdict(list)
-    for fi, fn, si, sl in feasible_pairs:
-        date_fac_vars[(fi, sl["date"])].append(x[(fi, si)])
-    for var_list in date_fac_vars.values():
-        if len(var_list) > 1:
-            model.Add(sum(var_list) <= 1)
-
-    # ── C4: Professor — exactly 1 online duty ─────────────────────
-    for fn in dgroups.get("P", []):
-        fi       = FAC_IDX[fn]
-        on_vars  = [var for si, sl, var in slots_for_fac[fi] if sl["type"] == "Online"]
-        if on_vars:
-            model.Add(sum(on_vars) == 1)
-
-    # ── C5: ACP — cadre-position-based online/offline split ───────
-    # Count how many online seats across all online slots need to be
-    # covered by ACP faculty (only ACP + P do online; P gets exactly 1).
-    # Allocate from the TOP of the ACP cadre list:
-    #   • First group  → 2 Online + 0 Offline  (to fill online shortfall)
-    #   • Middle group → 1 Online + 1 Offline  (standard)
-    #   • Last group   → 0 Online + 2 Offline  (adjustment / makeup)
-    # Last-2 ACP take 2 offline to compensate the first group's extra online.
-    acp_list    = dgroups.get("ACP", [])   # ordered as they appear in Faculty_Master
-    n_acp       = len(acp_list)
-    total_online_seats  = sum(sl["required"] for sl in ALL_S if sl["type"] == "Online")
-    p_online_count      = len(dgroups.get("P", []))   # each P takes exactly 1 online
-    acp_online_needed   = max(0, total_online_seats - p_online_count)
-    # How many ACP need 2 online?
-    # Each ACP standard = 1 online. Each P = 1 online.
-    # Total covered standard = nP + nACP.
-    # Shortfall = total_online_seats - nP - nACP → these ACPs must take 2 online.
-    n_double_online  = max(0, total_online_seats - p_online_count - n_acp)
-    n_double_online  = min(n_double_online, n_acp // 2)   # can't exceed half the cadre
-    n_double_offline = n_double_online                     # last N ACPs take 2 offline to balance
-    n_double_offline = min(n_double_offline, n_acp - n_double_online)
-
-    log(f"\n  ACP cadre split    : {n_acp} total | "
-        f"{n_double_online} get 2-online | "
-        f"{n_acp - n_double_online - n_double_offline} get 1+1 | "
-        f"{n_double_offline} get 2-offline")
-
-    # Per-ACP type limits (used in C5, greedy fallback, and completion pass)
-    acp_online_limit  = {}
-    acp_offline_limit = {}
-    for idx, fn2 in enumerate(acp_list):
-        if idx < n_double_online:
-            acp_online_limit[fn2]  = 2
-            acp_offline_limit[fn2] = 0
-        elif idx >= n_acp - n_double_offline and n_double_offline > 0:
-            acp_online_limit[fn2]  = 0
-            acp_offline_limit[fn2] = 2
-        else:
-            acp_online_limit[fn2]  = 1
-            acp_offline_limit[fn2] = 1
-
-    for idx, fn in enumerate(acp_list):
-        fi       = FAC_IDX[fn]
-        on_vars  = [var for si, sl, var in slots_for_fac[fi] if sl["type"] == "Online"]
-        off_vars = [var for si, sl, var in slots_for_fac[fi] if sl["type"] == "Offline"]
-
-        if idx < n_double_online:
-            # First group: 2 online, 0 offline
-            if on_vars:  model.Add(sum(on_vars)  == 2)
-            if off_vars: model.Add(sum(off_vars) == 0)
-        elif idx >= n_acp - n_double_offline and n_double_offline > 0:
-            # Last group: 0 online, 2 offline
-            if on_vars:  model.Add(sum(on_vars)  == 0)
-            if off_vars: model.Add(sum(off_vars) == 2)
-        else:
-            # Standard: exactly 1 online + exactly 1 offline
-            if on_vars:  model.Add(sum(on_vars)  == 1)
-            if off_vars: model.Add(sum(off_vars) == 1)
-
-    # ── Objective: maximise (seniority priority + willingness score) ─
-    # Both are plain integers so no scaling needed.
-    obj_terms = []
-    for fi, fn, si, sl in feasible_pairs:
-        k    = (sl["date"], sl["session"], sl["type"])
-        sc   = fexp[fn].get(k, 0)
-        prio = DESIG_PRIORITY.get(fac_d[fn], 0)
-        coef = prio + sc
-        if coef > 0:
-            obj_terms.append(coef * x[(fi, si)])
-        elif fn in submitted:
-            # Slight discouragement for out-of-window slots of submitted faculty
-            obj_terms.append(-PENALTY * x[(fi, si)])
-    model.Maximize(sum(obj_terms))
-
     # ── Solve ────────────────────────────────────────────────────
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds  = 300
-    solver.parameters.num_search_workers   = 4
-    solver.parameters.log_search_progress  = False
-
-    log(f"\n  Solving CP-SAT (300 s limit, 4 parallel workers)...")
-    status      = solver.Solve(model)
-    status_name = solver.StatusName(status)
-    log(f"  Status    : {status_name}")
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        log(f"  Objective : {solver.ObjectiveValue():.0f}")
+    # ── Solve: greedy-first, CP-SAT optional ─────────────────────
+    # On Streamlit free tier, CP-SAT with many variables can exceed
+    # CPU limits. We run greedy first (instant), then the mandatory
+    # slot completion pass guarantees all seats are filled.
+    # CP-SAT is skipped to stay within resource limits.
+    log(f"\n  Solver: Greedy + Slot Completion Pass (resource-safe mode)")
+    status      = None
+    status_name = "Greedy"
 
     # ── Tag helper ───────────────────────────────────────────────
     def tag(fn, k, sc):
@@ -1145,24 +994,15 @@ def run_optimizer(log_box):
         if sc >= W_VAL_ADJ:      return "Willingness-ValAdj"
         return "OR-Assigned"
 
-    # ── Extract assignments from CP-SAT solution ─────────────────
+    # ── Extract assignments — always greedy ──────────────────────
     assigned = []
-    method   = f"CP-SAT ({status_name})"
+    method   = "Greedy + Slot Completion"
 
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        for fi, fn, si, sl in feasible_pairs:
-            if solver.Value(x[(fi, si)]) == 1:
-                k  = (sl["date"], sl["session"], sl["type"])
-                sc = fexp[fn].get(k, 0)
-                assigned.append({
-                    "Name": fn, "Date": sl["date"],
-                    "Session": sl["session"], "Type": sl["type"],
-                    "Allocated_By": tag(fn, k, sc)
-                })
+    if False:  # CP-SAT path disabled for Streamlit Cloud resource limits
+        pass
     else:
-        # ── Greedy fallback (CP-SAT infeasible) ──────────────────
-        log("  ⚠ CP-SAT infeasible — running greedy fallback...")
-        method         = "Greedy Fallback"
+        # ── Greedy solver ─────────────────────────────────────────
+        log("  Running greedy solver (seniority + willingness priority)...")
         alloc_count    = defaultdict(int)
         used_dates     = defaultdict(set)
         acp_type_count = defaultdict(lambda: {"Online": 0, "Offline": 0})
@@ -1182,6 +1022,7 @@ def run_optimizer(log_box):
                 if tp_ == "Offline" and acp_type_count[n]["Offline"] >= acp_offline_limit.get(n, 1): return False
             return True
 
+        # Pass 1: fill slots largest-first, honouring willingness + seniority
         for sl in sorted(ALL_S, key=lambda s: -s["required"]):
             d2, s2, r2, t2 = sl["date"], sl["session"], sl["required"], sl["type"]
             k     = (d2, s2, t2)
@@ -1200,6 +1041,7 @@ def run_optimizer(log_box):
                 assigned.append({"Name": fn, "Date": d2, "Session": s2,
                                  "Type": t2, "Allocated_By": tag(fn, k, sc)})
 
+        # Pass 2: fill remaining faculty duty quotas
         for fn in ALL_FAC:
             if remaining(fn) <= 0:
                 continue
@@ -1649,8 +1491,14 @@ if panel_mode == "Admin View":
                     "running, then re-enable after reviewing results.")
                 if st.button("▶ Run Optimizer", type="primary", use_container_width=True):
                     lb2 = st.empty()
+                    # Snapshot willingness bytes before entering spinner
+                    # (session_state reads can be unreliable inside st.spinner)
+                    will_bytes_snapshot = st.session_state.get("uploaded_willingness_bytes", None)
                     with st.spinner("Running CP-SAT optimization..."):
                         try:
+                            # Temporarily ensure the bytes are available
+                            if will_bytes_snapshot is not None:
+                                st.session_state["uploaded_willingness_bytes"] = will_bytes_snapshot
                             alloc_out, sumdf_out, slotdf_out, _ = run_optimizer(lb2)
                             st.success("✅ Optimization complete! Review results, then enable the allotment view in Portal Settings.")
 
@@ -1698,7 +1546,9 @@ if panel_mode == "Admin View":
 
                             st.balloons()
                         except Exception as e:
+                            import traceback
                             st.error(f"Optimizer error: {e}")
+                            st.code(traceback.format_exc(), language="text")
 
         # ── Tab 3: View Results ───────────────────────────────────
         with t3:
