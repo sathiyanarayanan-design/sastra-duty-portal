@@ -4,3 +4,6 @@ numpy
 openpyxl
 altair
 ortools
+scikit-learn
+scipy
+matplotlib
